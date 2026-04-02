@@ -5603,13 +5603,32 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
 
       // Determine whether this is a screen or window recording.
       // For SCREEN recording: the drawing board is a transparent overlay that
-      //   WGC already captures as part of the display – no background video
+      //   WGC already captures as part of the display — no background video
       //   needed and no WGC switch required.
       // For WINDOW recording: WGC only captures the target window, so we must
       //   switch WGC to the drawing board window and show the window content
       //   as a background video inside the drawing board (画中画 approach).
       const drawingBoardSourceType = selectedSource?.id?.startsWith('window:') ? 'window' : 'screen'
       console.log(`[open-drawing-board] sourceType=${drawingBoardSourceType}`)
+
+      // For SCREEN recording, resolve the target display bounds directly from
+      // screen.getAllDisplays() using the display_id stored on the selected
+      // source.  Passing these bounds to createDrawingBoardWindow lets it use
+      // screen.getDisplayMatching() (Priority 1) which is more reliable than
+      // the display-ID numeric comparison (Priority 2) that can silently fail
+      // when the extended display is selected.
+      if (drawingBoardSourceType === 'screen' && selectedSource?.display_id) {
+        const displayId = Number(selectedSource.display_id)
+        if (Number.isFinite(displayId) && displayId > 0) {
+          const resolvedDisplay = getScreen().getAllDisplays().find((d) => d.id === displayId)
+          if (resolvedDisplay) {
+            windowBounds = resolvedDisplay.bounds
+            console.log(`[open-drawing-board] Resolved screen display bounds from display_id=${displayId}: ${JSON.stringify(windowBounds)}`)
+          } else {
+            console.warn(`[open-drawing-board] display_id=${displayId} not found in getAllDisplays – falling back to createDrawingBoardWindow heuristics`)
+          }
+        }
+      }
 
       createDrawingBoardWindow(windowBounds, drawingBoardSourceType)
 
