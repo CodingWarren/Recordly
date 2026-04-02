@@ -378,6 +378,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	isNativeWindowsCaptureAvailable: () => ipcRenderer.invoke("is-native-windows-capture-available"),
 	muxNativeWindowsRecording: (pauseSegments?: Array<{ startMs: number; endMs: number }>) => ipcRenderer.invoke("mux-native-windows-recording", pauseSegments),
 	hideOsCursor: () => ipcRenderer.invoke("hide-cursor"),
+	showOsCursor: () => ipcRenderer.invoke("show-cursor"),
 	getAppVersion: () => ipcRenderer.invoke("app:getVersion"),
 	getRecordingPreferences: () => ipcRenderer.invoke("get-recording-preferences"),
 	setRecordingPreferences: (prefs: { microphoneEnabled?: boolean; microphoneDeviceId?: string; systemAudioEnabled?: boolean }) => ipcRenderer.invoke("set-recording-preferences", prefs),
@@ -391,4 +392,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		ipcRenderer.on("countdown-tick", listener);
 		return () => ipcRenderer.removeListener("countdown-tick", listener);
 	},
+	// ── Drawing Board ──────────────────────────────────────────────────────────
+	openDrawingBoard: () => ipcRenderer.invoke("open-drawing-board"),
+	closeDrawingBoard: () => ipcRenderer.invoke("close-drawing-board"),
+	getDrawingBoardData: () => ipcRenderer.invoke("get-drawing-board-data"),
+	setDrawingBoardData: (data: string) => ipcRenderer.invoke("set-drawing-board-data", data),
+	clearDrawingBoardData: () => ipcRenderer.invoke("clear-drawing-board-data"),
+	// Returns the native HWND and desktopCapturer-compatible source ID for the
+	// drawing board window.  Used to switch the WGC recording target to the
+	// drawing board so that both the background video and Excalidraw drawings
+	// are captured in a single composite frame (画中画 approach).
+	getDrawingBoardWindowSourceId: () => ipcRenderer.invoke("get-drawing-board-window-source-id"),
 });

@@ -360,6 +360,7 @@ interface Window {
 		getAppVersion: () => Promise<string>;
 		/** Hide the OS cursor before browser capture starts. */
 		hideOsCursor: () => Promise<{ success: boolean }>;
+		showOsCursor: () => Promise<{ success: boolean }>;
 		/** Recording preferences (mic, system audio) */
 		getRecordingPreferences: () => Promise<{ success: boolean; microphoneEnabled: boolean; microphoneDeviceId?: string; systemAudioEnabled: boolean }>;
 		setRecordingPreferences: (prefs: { microphoneEnabled?: boolean; microphoneDeviceId?: string; systemAudioEnabled?: boolean }) => Promise<{ success: boolean; error?: string }>;
@@ -370,6 +371,12 @@ interface Window {
 		cancelCountdown: () => Promise<{ success: boolean }>;
 		getActiveCountdown: () => Promise<{ success: boolean; seconds: number | null }>;
 		onCountdownTick: (callback: (seconds: number) => void) => () => void;
+		// ── Drawing Board ────────────────────────────────────────────────────
+		openDrawingBoard: () => Promise<{ success: boolean; error?: string }>;
+		closeDrawingBoard: () => Promise<{ success: boolean; error?: string }>;
+		getDrawingBoardData: () => Promise<{ success: boolean; data: string | null }>;
+		setDrawingBoardData: (data: string) => Promise<{ success: boolean }>;
+		clearDrawingBoardData: () => Promise<{ success: boolean }>;
 	};
 }
 

@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, ipcMain } from "electron";
 import { USER_DATA_PATH } from "./appPaths";
+import { getSelectedSourceDisplayId } from "./ipc/handlers";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const nodeRequire = createRequire(import.meta.url);
@@ -22,6 +23,7 @@ let hudOverlayHiddenFromCapture = true;
 let hudOverlayCaptureProtectionLoaded = false;
 let countdownWindow: BrowserWindow | null = null;
 let updateToastWindow: BrowserWindow | null = null;
+let drawingBoardWindow: BrowserWindow | null = null;
 
 const HUD_OVERLAY_SETTINGS_FILE = path.join(USER_DATA_PATH, "hud-overlay-settings.json");
 const HUD_BOTTOM_CLEARANCE_CM = 3.5;
@@ -521,6 +523,7 @@ export function createEditorWindow(): BrowserWindow {
 
 export function createSourceSelectorWindow(): BrowserWindow {
 	const { width, height } = getScreen().getPrimaryDisplay().workAreaSize;
+	console.log("[source-selector] Creating window...");
 
 	const win = new BrowserWindow({
 		width: 620,
@@ -545,13 +548,34 @@ export function createSourceSelectorWindow(): BrowserWindow {
 		},
 	});
 
+	win.webContents.on("did-start-loading", () => {
+		console.log("[source-selector] did-start-loading");
+	});
+
 	win.webContents.on("did-finish-load", () => {
+		console.log("[source-selector] did-finish-load, scheduling show...");
 		setTimeout(() => {
 			if (!win.isDestroyed()) {
+				console.log("[source-selector] show()");
 				win.show();
+			} else {
+				console.warn("[source-selector] window was destroyed before show()!");
 			}
 		}, 100);
 	});
+
+	win.webContents.on("did-fail-load", (_e, code, desc, url) => {
+		console.error(`[source-selector] did-fail-load code=${code} desc=${desc} url=${url}`);
+	});
+
+	win.webContents.on("render-process-gone", (_e, details) => {
+		console.error("[source-selector] render-process-gone:", details);
+	});
+
+	win.on("show", () => console.log("[source-selector] show event fired"));
+	win.on("hide", () => console.log("[source-selector] hide event fired"));
+	win.on("close", () => console.log("[source-selector] close event fired"));
+	win.on("closed", () => console.log("[source-selector] closed event fired"));
 
 	if (VITE_DEV_SERVER_URL) {
 		win.loadURL(VITE_DEV_SERVER_URL + "?windowType=source-selector");
@@ -627,5 +651,150 @@ export function closeCountdownWindow(): void {
 	if (countdownWindow && !countdownWindow.isDestroyed()) {
 		countdownWindow.close();
 		countdownWindow = null;
+	}
+}
+
+// ── Drawing Board Window ──────────────────────────────────────────────────────
+
+export function createDrawingBoardWindow(windowBounds?: { x: number; y: number; width: number; height: number } | null, sourceType?: 'screen' | 'window'): BrowserWindow {
+	// If already open, focus and return it
+	if (drawingBoardWindow && !drawingBoardWindow.isDestroyed()) {
+		drawingBoardWindow.focus();
+		return drawingBoardWindow;
+	}
+
+	// Determine which display to use:
+	// Priority 1: Window bounds passed in (for window-source recording – resolved by caller).
+	// Priority 2: The display the user selected as their recording source (screen source).
+	// Priority 3: The display where the HUD overlay window currently lives.
+	// Priority 4: The primary display.
+	const screen = getScreen();
+	const allDisplays = screen.getAllDisplays();
+	const primaryDisplay = screen.getPrimaryDisplay();
+
+	console.log("[drawing-board] === Display Detection ===");
+	console.log(`[drawing-board] Total displays: ${allDisplays.length}`);
+	allDisplays.forEach((d, i) => {
+		console.log(`[drawing-board]   Display[${i}] id=${d.id} bounds=${JSON.stringify(d.bounds)} scaleFactor=${d.scaleFactor} primary=${d.id === primaryDisplay.id}`);
+	});
+
+	let targetDisplay = primaryDisplay;
+
+	// Priority 1: Window bounds resolved by the caller (window-source recording)
+	if (windowBounds) {
+		const matchedByBounds = screen.getDisplayMatching(windowBounds);
+		targetDisplay = matchedByBounds;
+		console.log(`[drawing-board] Using window-bounds display id=${targetDisplay.id} bounds=${JSON.stringify(targetDisplay.bounds)} (windowBounds=${JSON.stringify(windowBounds)})`);
+	} else {
+		// Priority 2: Use the display that the user selected as their recording source (screen source)
+		const selectedDisplayId = getSelectedSourceDisplayId();
+		console.log(`[drawing-board] selectedSource display_id: ${selectedDisplayId}`);
+
+		if (selectedDisplayId !== null) {
+			const matched = allDisplays.find((d) => d.id === selectedDisplayId);
+			if (matched) {
+				targetDisplay = matched;
+				console.log(`[drawing-board] Using recording source display id=${targetDisplay.id} bounds=${JSON.stringify(targetDisplay.bounds)}`);
+			} else {
+				console.log(`[drawing-board] Recording source display id=${selectedDisplayId} not found in allDisplays, falling back`);
+			}
+		}
+
+		// Priority 3: Fall back to the display where the HUD window lives
+		if (targetDisplay === primaryDisplay && hudOverlayWindow && !hudOverlayWindow.isDestroyed()) {
+			const hudBounds = hudOverlayWindow.getBounds();
+			const hudDisplay = screen.getDisplayMatching(hudBounds);
+			if (hudDisplay.id !== primaryDisplay.id) {
+				targetDisplay = hudDisplay;
+				console.log(`[drawing-board] Falling back to HUD display id=${targetDisplay.id} bounds=${JSON.stringify(targetDisplay.bounds)}`);
+			}
+		}
+	}
+
+	const { bounds } = targetDisplay;
+	console.log(`[drawing-board] Creating window at bounds: ${JSON.stringify(bounds)}`);
+
+	const win = new BrowserWindow({
+		// Cover the entire screen (including taskbar area)
+		x: bounds.x,
+		y: bounds.y,
+		width: bounds.width,
+		height: bounds.height,
+		frame: false,
+		transparent: true,           // Transparent window so screen shows through
+		backgroundColor: "#00000000", // Fully transparent background
+		resizable: false,
+		alwaysOnTop: true,
+		skipTaskbar: true,
+		hasShadow: false,
+		show: false,
+		title: "Drawing Board – Recordly",
+		focusable: true,
+		...(process.platform !== "darwin" && {
+			icon: WINDOW_ICON_PATH,
+		}),
+		webPreferences: {
+			preload: path.join(__dirname, "preload.mjs"),
+			nodeIntegration: false,
+			contextIsolation: true,
+			webSecurity: false,
+			backgroundThrottling: false,
+		},
+	});
+
+	win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+
+	// On macOS, set the window level so it floats above everything
+	if (process.platform === "darwin") {
+		win.setAlwaysOnTop(true, "screen-saver");
+	}
+
+	win.webContents.on("did-finish-load", () => {
+		setTimeout(() => {
+			if (!win.isDestroyed()) {
+				win.show();
+				win.focus();
+				// ── Workaround: Electron/Chromium on Windows constrains the
+				// viewport to the primary display's dimensions when a window is
+				// first created on a secondary display.  Calling setBounds()
+				// after show() forces the renderer to recalculate its viewport
+				// to match the actual window size.
+				win.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
+				// Open DevTools in dev mode so we can inspect renderer logs
+				if (VITE_DEV_SERVER_URL) {
+					win.webContents.openDevTools({ mode: "detach" });
+				}
+			}
+		}, 80);
+	});
+
+	drawingBoardWindow = win;
+
+	win.on("closed", () => {
+		if (drawingBoardWindow === win) {
+			drawingBoardWindow = null;
+		}
+	});
+
+	const resolvedSourceType = sourceType ?? 'screen'
+	if (VITE_DEV_SERVER_URL) {
+		win.loadURL(`${VITE_DEV_SERVER_URL}?windowType=drawing-board&sourceType=${resolvedSourceType}`);
+	} else {
+		win.loadFile(path.join(RENDERER_DIST, "index.html"), {
+			query: { windowType: "drawing-board", sourceType: resolvedSourceType },
+		});
+	}
+
+	return win;
+}
+
+export function getDrawingBoardWindow(): BrowserWindow | null {
+	return drawingBoardWindow && !drawingBoardWindow.isDestroyed() ? drawingBoardWindow : null;
+}
+
+export function closeDrawingBoardWindow(): void {
+	if (drawingBoardWindow && !drawingBoardWindow.isDestroyed()) {
+		drawingBoardWindow.close();
+		drawingBoardWindow = null;
 	}
 }

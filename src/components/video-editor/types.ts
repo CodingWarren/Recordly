@@ -336,3 +336,45 @@ function clamp(value: number, min: number, max: number) {
 	if (Number.isNaN(value)) return (min + max) / 2;
 	return Math.min(max, Math.max(min, value));
 }
+
+// ── Drawing Board / Excalidraw integration ────────────────────────────────────
+
+/**
+ * A drawing region represents a time-bounded Excalidraw canvas snapshot
+ * that is overlaid on the video during export and playback.
+ *
+ * `excalidrawData` is the JSON-serialised Excalidraw scene (elements + appState).
+ * `svgSnapshot` is an optional pre-rendered SVG string used for fast preview.
+ */
+export interface DrawingRegion {
+	id: string;
+	/** Start time in milliseconds (inclusive). */
+	startMs: number;
+	/** End time in milliseconds (exclusive). */
+	endMs: number;
+	/** Serialised Excalidraw scene JSON. */
+	excalidrawData: string;
+	/** Optional pre-rendered SVG for fast preview / export. */
+	svgSnapshot?: string;
+	/** Opacity of the drawing overlay (0–1). Default 1. */
+	opacity: number;
+	/** Whether the drawing animates in stroke-by-stroke. Default false. */
+	animateStrokes: boolean;
+}
+
+export const DEFAULT_DRAWING_REGION_OPACITY = 1;
+
+export function createDrawingRegion(
+	startMs: number,
+	endMs: number,
+	excalidrawData: string,
+): DrawingRegion {
+	return {
+		id: `drawing-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+		startMs,
+		endMs,
+		excalidrawData,
+		opacity: DEFAULT_DRAWING_REGION_OPACITY,
+		animateStrokes: false,
+	};
+}

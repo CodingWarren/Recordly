@@ -11,7 +11,7 @@ import type { SaveDialogOptions } from 'electron'
 import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, shell, systemPreferences } from 'electron'
 import { RECORDINGS_DIR, USER_DATA_PATH } from '../appPaths'
 import { hideCursor, showCursor } from '../cursorHider'
-import { closeCountdownWindow, createCountdownWindow, getCountdownWindow } from '../windows'
+import { closeCountdownWindow, createCountdownWindow, createDrawingBoardWindow, closeDrawingBoardWindow, getCountdownWindow, getDrawingBoardWindow } from '../windows'
 import { resolveWindowsCaptureDisplay } from './windowsCaptureSelection'
 
 const execFileAsync = promisify(execFile)
@@ -188,6 +188,18 @@ let currentCursorVisualType: CursorVisualType | undefined = undefined
 /** Returns the currently selected source ID for setDisplayMediaRequestHandler */
 export function getSelectedSourceId(): string | null {
   return selectedSource?.id as string | null ?? null
+}
+
+/** Returns the display_id of the currently selected recording source.
+ *  For screen sources this is the Electron display id (number).
+ *  Returns null if no source is selected or the source is a window capture.
+ */
+export function getSelectedSourceDisplayId(): number | null {
+  if (!selectedSource) return null
+  // display_id is set by Electron's desktopCapturer for screen sources
+  const raw = (selectedSource as unknown as Record<string, unknown>).display_id
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
 }
 
 export function killWindowsCaptureProcess() {
@@ -1741,6 +1753,73 @@ async function resolveLinuxWindowBounds(source: SelectedSource): Promise<WindowB
   }
 }
 
+/**
+ * Use Win32 MonitorFromWindow + GetMonitorInfo to find the display bounds that
+ * contain the given window.  This is more reliable than GetWindowRect + title
+ * matching because it works even when the window title doesn't match exactly
+ * (e.g. Remote Desktop, virtual machines, sandboxed apps).
+ */
+async function resolveWindowsDisplayBoundsForWindow(source: SelectedSource): Promise<WindowBounds | null> {
+  const windowId = parseWindowId(source?.id)
+  console.log(`[resolveWindowsDisplayBoundsForWindow] source.id="${source?.id}" windowId=${windowId}`)
+  if (!windowId) return null
+
+  // Embed windowId directly in the script to avoid PowerShell echoing the
+  // argument as a second expression (which would break JSON.parse).
+  // Also use GetAncestor(GA_ROOT) so that child-window HWNDs are resolved to
+  // their top-level parent before querying the monitor.
+  const script = [
+    'Add-Type -TypeDefinition @"',
+    'using System;',
+    'using System.Runtime.InteropServices;',
+    'public static class RecordlyMonitorInfo2 {',
+    '  [StructLayout(LayoutKind.Sequential)]',
+    '  public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }',
+    '  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]',
+    '  public struct MONITORINFO {',
+    '    public int cbSize;',
+    '    public RECT rcMonitor;',
+    '    public RECT rcWork;',
+    '    public uint dwFlags;',
+    '  }',
+    '  [DllImport("user32.dll")]',
+    '  public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);',
+    '  [DllImport("user32.dll", CharSet = CharSet.Auto)]',
+    '  [return: MarshalAs(UnmanagedType.Bool)]',
+    '  public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);',
+    '  [DllImport("user32.dll")]',
+    '  public static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);',
+    '}',
+    '"@',
+    // Embed the HWND value directly — no param() so PowerShell won't echo it
+    `$handle = [IntPtr][Int64]${windowId}`,
+    // GA_ROOT = 2: walk up to the top-level ancestor so child-window HWNDs
+    // resolve to the correct monitor
+    '$root = [RecordlyMonitorInfo2]::GetAncestor($handle, 2)',
+    'if ($root -ne [IntPtr]::Zero) { $handle = $root }',
+    '$monitor = [RecordlyMonitorInfo2]::MonitorFromWindow($handle, 2)',
+    '$info = New-Object RecordlyMonitorInfo2+MONITORINFO',
+    '$info.cbSize = [System.Runtime.InteropServices.Marshal]::SizeOf($info)',
+    'if ([RecordlyMonitorInfo2]::GetMonitorInfo($monitor, [ref]$info)) {',
+    '  @{ x = $info.rcMonitor.Left; y = $info.rcMonitor.Top; width = ($info.rcMonitor.Right - $info.rcMonitor.Left); height = ($info.rcMonitor.Bottom - $info.rcMonitor.Top) } | ConvertTo-Json -Compress',
+    '} else { exit 1 }',
+  ].join('\n')
+
+  try {
+    const result = await execFileAsync(
+      'powershell.exe',
+      ['-NoProfile', '-Command', script],
+      { timeout: 3000 },
+    )
+    console.log(`[resolveWindowsDisplayBoundsForWindow] stdout="${result.stdout.trim()}" stderr="${result.stderr?.trim()}"`)
+    const bounds = JSON.parse(result.stdout.trim()) as WindowBounds
+    return bounds && bounds.width > 0 && bounds.height > 0 ? bounds : null
+  } catch (err) {
+    console.warn(`[resolveWindowsDisplayBoundsForWindow] error for windowId=${windowId}:`, err)
+    return null
+  }
+}
+
 async function resolveWindowsWindowBounds(source: SelectedSource): Promise<WindowBounds | null> {
   const windowId = parseWindowId(source?.id)
   const windowTitle = typeof source.windowTitle === 'string' ? source.windowTitle.trim() : source.name.trim()
@@ -2998,6 +3077,56 @@ async function startInteractionCapture() {
   }
 }
 
+// ── Drawing Board state (in-memory, persisted to project file) ────────────────
+let drawingBoardData: string | null = null
+
+// ── Drawing Board recording state ─────────────────────────────────────────────
+// When the drawing board opens during a WGC recording we stop the current
+// capture, start a new one targeting the drawing board window (which shows
+// the original source as background + Excalidraw drawings), and later merge
+// the two segments into a single video file.
+let drawingBoardRecordingActive = false
+let drawingBoardPreRecordingVideoPath: string | null = null
+
+async function mergeVideoSegments(videoPaths: string[]): Promise<string> {
+  const ffmpegPath = getFfmpegBinaryPath()
+  const validPaths = videoPaths.filter((p) => p && existsSync(p))
+
+  if (validPaths.length === 0) {
+    throw new Error('No valid video segments to merge')
+  }
+  if (validPaths.length === 1) {
+    return validPaths[0]
+  }
+
+  // Use the first segment's path as the base for the merged output name
+  const outputPath = validPaths[0].replace(/(-drawing)?\.mp4$/i, '-merged.mp4')
+  const concatFilePath = `${outputPath}.concat.txt`
+  // FFmpeg concat demuxer requires forward slashes and single-quoted paths
+  const concatContent = validPaths
+    .map((p) => `file '${p.replace(/\\/g, '/')}'`)
+    .join('\n')
+
+  await fs.writeFile(concatFilePath, concatContent, 'utf-8')
+
+  try {
+    await execFileAsync(
+      ffmpegPath,
+      ['-y', '-f', 'concat', '-safe', '0', '-i', concatFilePath, '-c', 'copy', outputPath],
+      { timeout: 120_000, maxBuffer: 10 * 1024 * 1024 },
+    )
+  } finally {
+    await fs.rm(concatFilePath, { force: true }).catch(() => {})
+  }
+
+  // Remove the individual segment files now that they are merged
+  for (const segmentPath of validPaths) {
+    await fs.rm(segmentPath, { force: true }).catch(() => {})
+  }
+
+  return outputPath
+}
+
 export function registerIpcHandlers(
   createEditorWindow: () => void,
   createSourceSelectorWindow: () => BrowserWindow,
@@ -3345,11 +3474,14 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
   })
 
   ipcMain.handle('open-source-selector', () => {
+    console.log('[ipc] open-source-selector called')
     const sourceSelectorWin = getSourceSelectorWindow()
     if (sourceSelectorWin) {
+      console.log('[ipc] source selector already open, focusing')
       sourceSelectorWin.focus()
       return
     }
+    console.log('[ipc] creating new source selector window')
     createSourceSelectorWindow()
   })
 
@@ -4053,8 +4185,26 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
     }
 
     try {
+      // ── Merge drawing board segments ────────────────────────────────────────
+      // If the drawing board was opened during recording, drawingBoardPreRecordingVideoPath
+      // holds the partial video captured before the switch.  Concatenate it with
+      // the drawing board recording (videoPath) to produce a single seamless file.
+      let finalVideoPath = videoPath
+      if (drawingBoardRecordingActive && drawingBoardPreRecordingVideoPath) {
+        console.log('[mux-native-windows-recording] Merging pre-recording segment with drawing board recording...')
+        try {
+          finalVideoPath = await mergeVideoSegments([drawingBoardPreRecordingVideoPath, videoPath])
+          console.log(`[mux-native-windows-recording] Merged video: ${finalVideoPath}`)
+        } catch (mergeError) {
+          console.error('[mux-native-windows-recording] Segment merge failed (using drawing board recording only):', mergeError)
+          // Fall back to just the drawing board recording
+        }
+        drawingBoardRecordingActive = false
+        drawingBoardPreRecordingVideoPath = null
+      }
+
       if (windowsSystemAudioPath || windowsMicAudioPath) {
-        await muxNativeWindowsVideoWithAudio(videoPath, windowsSystemAudioPath, windowsMicAudioPath, pauseSegments ?? [])
+        await muxNativeWindowsVideoWithAudio(finalVideoPath, windowsSystemAudioPath, windowsMicAudioPath, pauseSegments ?? [])
         windowsSystemAudioPath = null
         windowsMicAudioPath = null
       }
@@ -4062,12 +4212,14 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
       recordNativeCaptureDiagnostics({
         backend: 'windows-wgc',
         phase: 'mux',
-        outputPath: videoPath,
-        fileSizeBytes: await getFileSizeIfPresent(videoPath),
+        outputPath: finalVideoPath,
+        fileSizeBytes: await getFileSizeIfPresent(finalVideoPath),
       })
-      return await finalizeStoredVideo(videoPath)
+      return await finalizeStoredVideo(finalVideoPath)
     } catch (error) {
       console.error('Failed to mux native Windows recording:', error)
+      drawingBoardRecordingActive = false
+      drawingBoardPreRecordingVideoPath = null
       recordNativeCaptureDiagnostics({
         backend: 'windows-wgc',
         phase: 'mux',
@@ -4981,6 +5133,15 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
     return { success: hideCursor() }
   })
 
+  ipcMain.handle('show-cursor', () => {
+    if (process.platform !== 'win32') {
+      return { success: true }
+    }
+
+    showCursor()
+    return { success: true }
+  })
+
   ipcMain.handle('get-shortcuts', async () => {
     try {
       const data = await fs.readFile(SHORTCUTS_FILE, 'utf-8');
@@ -5132,6 +5293,212 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
     return {
       success: true,
       seconds: countdownInProgress ? countdownRemaining : null,
+    }
+  })
+
+  // ── Drawing Board IPC handlers ──────────────────────────────────────────────
+
+  ipcMain.handle('open-drawing-board', async () => {
+    try {
+      // For window-source recording, resolve the window's current bounds so the
+      // drawing board can be placed on the correct display.
+      let windowBounds: { x: number; y: number; width: number; height: number } | null = null
+
+      if (selectedSource?.id?.startsWith('window:')) {
+        try {
+          if (process.platform === 'win32') {
+            // Try GetWindowRect first (gives exact window position)
+            windowBounds = await resolveWindowsWindowBounds(selectedSource)
+            console.log(`[open-drawing-board] resolveWindowsWindowBounds for "${selectedSource.name}":`, windowBounds)
+
+            // Fallback: use MonitorFromWindow to get the display bounds directly.
+            // This works even for windows whose title doesn't match (RDP, VMs, etc.)
+            if (!windowBounds) {
+              windowBounds = await resolveWindowsDisplayBoundsForWindow(selectedSource)
+              console.log(`[open-drawing-board] resolveWindowsDisplayBoundsForWindow for "${selectedSource.name}":`, windowBounds)
+            }
+          } else if (process.platform === 'darwin') {
+            windowBounds = await resolveMacWindowBounds(selectedSource)
+            console.log(`[open-drawing-board] resolveMacWindowBounds for "${selectedSource.name}":`, windowBounds)
+          } else if (process.platform === 'linux') {
+            windowBounds = await resolveLinuxWindowBounds(selectedSource)
+            console.log(`[open-drawing-board] resolveLinuxWindowBounds for "${selectedSource.name}":`, windowBounds)
+          }
+        } catch (boundsError) {
+          console.warn('[open-drawing-board] Failed to resolve window bounds, falling back to display_id:', boundsError)
+        }
+      }
+
+      // Determine whether this is a screen or window recording.
+      // For SCREEN recording: the drawing board is a transparent overlay that
+      //   WGC already captures as part of the display – no background video
+      //   needed and no WGC switch required.
+      // For WINDOW recording: WGC only captures the target window, so we must
+      //   switch WGC to the drawing board window and show the window content
+      //   as a background video inside the drawing board (画中画 approach).
+      const drawingBoardSourceType = selectedSource?.id?.startsWith('window:') ? 'window' : 'screen'
+      console.log(`[open-drawing-board] sourceType=${drawingBoardSourceType}`)
+
+      createDrawingBoardWindow(windowBounds, drawingBoardSourceType)
+
+      // ── Auto-switch WGC to record the drawing board window ──────────────────
+      // Only needed for WINDOW recording.  For screen recording the drawing
+      // board is a transparent overlay that WGC captures directly as part of
+      // the display, so switching WGC would create an infinite mirror effect
+      // (the background video captures the screen which contains the drawing
+      // board which captures the screen …) causing dozens of cursor ghosts.
+      if (process.platform === 'win32' && windowsNativeCaptureActive && windowsCaptureProcess && drawingBoardSourceType === 'window') {
+        try {
+          console.log('[open-drawing-board] WGC active – switching capture target to drawing board window...')
+
+          // 1. Stop the current WGC recording and save the partial video
+          const proc = windowsCaptureProcess
+          const preferredVideoPath = windowsCaptureTargetPath
+          windowsCaptureStopRequested = true
+          proc.stdin.write('stop\n')
+
+          const tempVideoPath = await waitForWindowsCaptureStop(proc)
+          windowsCaptureProcess = null
+          windowsNativeCaptureActive = false
+          nativeScreenRecordingActive = false
+          windowsCaptureTargetPath = null
+          windowsCaptureStopRequested = false
+          windowsCapturePaused = false
+
+          const partialVideoPath = preferredVideoPath ?? tempVideoPath
+          console.log(`[open-drawing-board] Partial video saved: ${partialVideoPath}`)
+
+          // 2. Wait for the drawing board window to finish loading its background
+          //    capture before we start recording it (gives getDisplayMedia time
+          //    to connect and the first video frame to arrive).
+          await new Promise((resolve) => setTimeout(resolve, 1200))
+
+          // 3. Get the drawing board window's HWND
+          const drawingBoardWin = getDrawingBoardWindow()
+          if (!drawingBoardWin || drawingBoardWin.isDestroyed()) {
+            console.warn('[open-drawing-board] Drawing board window not found after wait – keeping partial video only')
+            drawingBoardPreRecordingVideoPath = null
+            windowsPendingVideoPath = partialVideoPath
+            return { success: true }
+          }
+
+          const hwndBuffer = drawingBoardWin.getNativeWindowHandle()
+          const hwnd = (process.arch === 'x64' || process.arch === 'arm64')
+            ? Number(hwndBuffer.readBigInt64LE(0))
+            : hwndBuffer.readInt32LE(0)
+
+          console.log(`[open-drawing-board] Drawing board HWND: ${hwnd}`)
+
+          // 4. Start a new WGC recording targeting the drawing board window
+          const exePath = getWindowsCaptureExePath()
+          const recordingsDir = await getRecordingsDir()
+          const timestamp = Date.now()
+          const drawingOutputPath = path.join(recordingsDir, `recording-${timestamp}-drawing.mp4`)
+
+          const config: Record<string, unknown> = {
+            outputPath: drawingOutputPath,
+            fps: 60,
+            windowHandle: hwnd,
+          }
+
+          windowsCaptureOutputBuffer = ''
+          windowsCaptureTargetPath = drawingOutputPath
+          windowsCaptureStopRequested = false
+          windowsCapturePaused = false
+          windowsCaptureProcess = spawn(exePath, [JSON.stringify(config)], {
+            cwd: recordingsDir,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          })
+          attachWindowsCaptureLifecycle(windowsCaptureProcess)
+
+          windowsCaptureProcess.stdout.on('data', (chunk: Buffer) => {
+            windowsCaptureOutputBuffer += chunk.toString()
+          })
+          windowsCaptureProcess.stderr.on('data', (chunk: Buffer) => {
+            windowsCaptureOutputBuffer += chunk.toString()
+          })
+
+          await waitForWindowsCaptureStart(windowsCaptureProcess)
+          windowsNativeCaptureActive = true
+          nativeScreenRecordingActive = true
+          drawingBoardRecordingActive = true
+          drawingBoardPreRecordingVideoPath = partialVideoPath
+
+          console.log(`[open-drawing-board] WGC switched to drawing board window. Drawing output: ${drawingOutputPath}`)
+        } catch (switchError) {
+          console.error('[open-drawing-board] Failed to switch WGC to drawing board window (non-fatal):', switchError)
+          // Reset drawing board recording state so stop-recording still works
+          drawingBoardRecordingActive = false
+          drawingBoardPreRecordingVideoPath = null
+        }
+      }
+
+      return { success: true }
+    } catch (error) {
+      console.error('Failed to open drawing board:', error)
+      return { success: false, error: String(error) }
+    }
+  })
+
+  ipcMain.handle('close-drawing-board', () => {
+    try {
+      closeDrawingBoardWindow()
+      return { success: true }
+    } catch (error) {
+      console.error('Failed to close drawing board:', error)
+      return { success: false, error: String(error) }
+    }
+  })
+
+  ipcMain.handle('get-drawing-board-data', () => {
+    return { success: true, data: drawingBoardData }
+  })
+
+  ipcMain.handle('set-drawing-board-data', (_event, data: string) => {
+    drawingBoardData = typeof data === 'string' ? data : null
+    return { success: true }
+  })
+
+  ipcMain.handle('clear-drawing-board-data', () => {
+    drawingBoardData = null
+    return { success: true }
+  })
+
+  // Returns the native window handle (HWND on Windows) and a desktopCapturer-
+  // compatible source ID for the drawing board window.  The renderer can use
+  // this to switch the WGC recording target to the drawing board window so
+  // that both the background video and the Excalidraw drawings are captured
+  // in a single composite frame (画中画 / Picture-in-Picture approach).
+  ipcMain.handle('get-drawing-board-window-source-id', async () => {
+    const drawingBoardWin = getDrawingBoardWindow()
+    if (!drawingBoardWin || drawingBoardWin.isDestroyed()) {
+      return { success: false, message: 'Drawing board window is not open' }
+    }
+
+    try {
+      // getNativeWindowHandle() returns a Buffer containing the platform-
+      // specific window handle.  On Windows x64/arm64 the HWND is stored as
+      // a 64-bit little-endian integer; on 32-bit it is 32-bit.
+      const hwndBuffer = drawingBoardWin.getNativeWindowHandle()
+      const hwnd = (process.arch === 'x64' || process.arch === 'arm64')
+        ? Number(hwndBuffer.readBigInt64LE(0))
+        : hwndBuffer.readInt32LE(0)
+
+      // Construct the source ID in the format produced by desktopCapturer:
+      //   "window:<HWND>:0"
+      const sourceId = `window:${hwnd}:0`
+
+      console.log(`[get-drawing-board-window-source-id] hwnd=${hwnd} sourceId=${sourceId}`)
+
+      return {
+        success: true,
+        sourceId,
+        hwnd,
+        sourceName: 'Drawing Board – Recordly',
+      }
+    } catch (error) {
+      console.error('Failed to get drawing board window source ID:', error)
+      return { success: false, error: String(error) }
     }
   })
 }

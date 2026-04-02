@@ -1,6 +1,7 @@
 import {
 	AppWindow,
 	ArrowUpCircle,
+	PencilLine,
 	ChevronUp,
 	CheckCircle2,
 	Eye,
@@ -777,6 +778,13 @@ export function LaunchWindow() {
 			</IconButton>
 
 			<IconButton
+				onClick={() => void window.electronAPI?.openDrawingBoard?.()}
+				title="Open Drawing Board"
+			>
+				<PencilLine size={16} />
+			</IconButton>
+
+			<IconButton
 				onClick={() => window.electronAPI?.hudOverlayHide?.()}
 				title={t("recording.hideHud")}
 			>
@@ -855,6 +863,13 @@ export function LaunchWindow() {
 				title={t("recording.more")}
 			>
 				<MoreVertical size={18} />
+			</IconButton>
+
+			<IconButton
+				onClick={() => void window.electronAPI?.openDrawingBoard?.()}
+				title="Open Drawing Board"
+			>
+				<PencilLine size={16} />
 			</IconButton>
 
 			<IconButton

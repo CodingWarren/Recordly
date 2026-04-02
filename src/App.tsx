@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { CountdownOverlay } from "./components/countdown/CountdownOverlay";
+import { DrawingBoardWindow } from "./components/drawing-board/DrawingBoardWindow";
 import { LaunchWindow } from "./components/launch/LaunchWindow";
 import { SourceSelector } from "./components/launch/SourceSelector";
 import { UpdateToastWindow } from "./components/launch/UpdateToastWindow";
@@ -29,6 +30,17 @@ export default function App() {
 			document.body.style.background = "transparent";
 			document.documentElement.style.background = "transparent";
 			document.getElementById("root")?.style.setProperty("background", "transparent");
+		}
+
+		// Drawing board: close on Escape key
+		if (type === "drawing-board") {
+			const handleKeyDown = (e: KeyboardEvent) => {
+				if (e.key === "Escape") {
+					void window.electronAPI?.closeDrawingBoard?.();
+				}
+			};
+			document.addEventListener("keydown", handleKeyDown);
+			return () => document.removeEventListener("keydown", handleKeyDown);
 		}
 
 		if (type === "hud-overlay" || type === "update-toast") {
@@ -61,6 +73,8 @@ export default function App() {
 			return <CountdownOverlay />;
 		case "update-toast":
 			return <UpdateToastWindow />;
+		case "drawing-board":
+			return <DrawingBoardWindow />;
 		case "editor":
 			return (
 				<ShortcutsProvider>

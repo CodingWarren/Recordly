@@ -34,6 +34,12 @@ export default defineConfig({
         : {},
     }),
   ],
+  define: {
+    'process.env': JSON.stringify({ NODE_ENV: process.env.NODE_ENV ?? 'development' }),
+    'process.platform': JSON.stringify(process.platform),
+    'process.version': JSON.stringify(process.version),
+    'process.browser': JSON.stringify(true),
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
@@ -41,6 +47,7 @@ export default defineConfig({
   },
   optimizeDeps: {
     entries: ['index.html'],
+    include: ['@excalidraw/excalidraw'],
     exclude: [
       'lucide-react',
       'react-icons/bs',
@@ -66,11 +73,11 @@ export default defineConfig({
         manualChunks: {
           'pixi': ['pixi.js'],
           'react-vendor': ['react', 'react-dom'],
-          'video-processing': ['mediabunny', 'mp4box', '@fix-webm-duration/fix']
+          'video-processing': ['mediabunny', 'mp4box', '@fix-webm-duration/fix'],
+          'excalidraw': ['@excalidraw/excalidraw'],
         }
       }
     },
     chunkSizeWarningLimit: 1000
   }
 })
-
