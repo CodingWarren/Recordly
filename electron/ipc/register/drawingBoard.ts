@@ -35,7 +35,7 @@ import {
 	windowsNativeCaptureActive,
 } from "../state";
 import type { SelectedSource, WindowBounds } from "../types";
-import { getRecordingsDir, moveFileWithOverwrite } from "../utils";
+import { getRecordingsDir, getScreen, moveFileWithOverwrite } from "../utils";
 
 let drawingBoardData: string | null = null;
 let drawingBoardRecordingActive = false;
@@ -116,7 +116,13 @@ async function mergeVideoSegments(videoPaths: string[]): Promise<string> {
 
 async function resolveSelectedWindowBounds(source: SelectedSource): Promise<WindowBounds | null> {
 	if (!source.id?.startsWith("window:")) {
-		return null;
+		const displayId = Number(source.display_id);
+		if (!Number.isFinite(displayId) || displayId <= 0) {
+			return null;
+		}
+
+		const resolvedDisplay = getScreen().getAllDisplays().find((display) => display.id === displayId);
+		return resolvedDisplay?.bounds ?? null;
 	}
 
 	if (process.platform === "win32") {
