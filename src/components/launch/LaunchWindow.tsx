@@ -204,6 +204,9 @@ function LaunchWindowContent() {
 			onToggleMicrophone={() => setMicrophoneEnabled(!microphoneEnabled)}
 			onPauseResume={paused ? resumeRecording : pauseRecording}
 			onStopRecording={toggleRecording}
+			onOpenDrawingBoard={() => {
+				void window.electronAPI?.openDrawingBoard?.();
+			}}
 			onHideHud={() => window.electronAPI?.hudOverlayHide?.()}
 			onCancelRecording={cancelRecording}
 			formatTime={formatTime}

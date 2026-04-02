@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, ipcMain } from "electron";
 import { USER_DATA_PATH } from "./appPaths";
 import { getHudOverlayWindowBounds, resizeHudOverlayFallbackBounds } from "./hudOverlayBounds";
+import { selectedSource } from "./ipc/state";
 import { getPackagedRendererBaseUrl } from "./rendererServer";
 
 const electronWindowsDir = path.dirname(fileURLToPath(import.meta.url));
@@ -32,6 +33,7 @@ let hudOverlayMouseReassertTimer: NodeJS.Timeout | null = null;
 let hudOverlayRecordingActive = false;
 let countdownWindow: BrowserWindow | null = null;
 let updateToastWindow: BrowserWindow | null = null;
+let drawingBoardWindow: BrowserWindow | null = null;
 
 const HUD_OVERLAY_SETTINGS_FILE = path.join(USER_DATA_PATH, "hud-overlay-settings.json");
 const HUD_EDGE_MARGIN_DIP = 16;
@@ -178,6 +180,12 @@ function getScreen() {
 		);
 	}
 	return nodeRequire("electron").screen as typeof import("electron").screen;
+}
+
+function getSelectedSourceDisplayId(): number | null {
+	const raw = selectedSource?.display_id;
+	const parsed = Number(raw);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function getHudOverlayDisplay() {
@@ -1022,5 +1030,109 @@ export function closeCountdownWindow(): void {
 	if (countdownWindow && !countdownWindow.isDestroyed()) {
 		countdownWindow.close();
 		countdownWindow = null;
+	}
+}
+
+export function createDrawingBoardWindow(
+	windowBounds?: { x: number; y: number; width: number; height: number } | null,
+	sourceType: "screen" | "window" = "screen",
+): BrowserWindow {
+	if (drawingBoardWindow && !drawingBoardWindow.isDestroyed()) {
+		drawingBoardWindow.focus();
+		return drawingBoardWindow;
+	}
+
+	const screen = getScreen();
+	const allDisplays = screen.getAllDisplays();
+	const primaryDisplay = screen.getPrimaryDisplay();
+	let targetDisplay = primaryDisplay;
+
+	if (windowBounds) {
+		targetDisplay = screen.getDisplayMatching(windowBounds);
+	} else {
+		const selectedDisplayId = getSelectedSourceDisplayId();
+		if (selectedDisplayId !== null) {
+			targetDisplay =
+				allDisplays.find((display) => display.id === selectedDisplayId) ?? targetDisplay;
+		}
+
+		if (targetDisplay === primaryDisplay) {
+			const hudWindow = getHudOverlayWindow();
+			if (hudWindow) {
+				targetDisplay = screen.getDisplayMatching(hudWindow.getBounds());
+			}
+		}
+	}
+
+	const { bounds } = targetDisplay;
+	const win = new BrowserWindow({
+		x: bounds.x,
+		y: bounds.y,
+		width: bounds.width,
+		height: bounds.height,
+		frame: false,
+		transparent: true,
+		backgroundColor: "#00000000",
+		resizable: false,
+		alwaysOnTop: true,
+		skipTaskbar: true,
+		hasShadow: false,
+		show: false,
+		title: "Drawing Board - Recordly",
+		focusable: true,
+		...(process.platform !== "darwin" && {
+			icon: WINDOW_ICON_PATH,
+		}),
+		webPreferences: {
+			preload: path.join(electronWindowsDir, "preload.mjs"),
+			nodeIntegration: false,
+			contextIsolation: true,
+			webSecurity: false,
+			backgroundThrottling: false,
+		},
+	});
+
+	win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+	if (process.platform === "darwin") {
+		win.setAlwaysOnTop(true, "screen-saver");
+	}
+
+	win.webContents.on("did-finish-load", () => {
+		setTimeout(() => {
+			if (!win.isDestroyed()) {
+				win.show();
+				win.focus();
+				win.setBounds(bounds, false);
+			}
+		}, 80);
+	});
+
+	drawingBoardWindow = win;
+	win.on("closed", () => {
+		if (drawingBoardWindow === win) {
+			drawingBoardWindow = null;
+		}
+	});
+
+	if (VITE_DEV_SERVER_URL) {
+		const query = new URLSearchParams({ windowType: "drawing-board", sourceType });
+		win.loadURL(`${VITE_DEV_SERVER_URL}?${query.toString()}`);
+	} else {
+		win.loadFile(path.join(RENDERER_DIST, "index.html"), {
+			query: { windowType: "drawing-board", sourceType },
+		});
+	}
+
+	return win;
+}
+
+export function getDrawingBoardWindow(): BrowserWindow | null {
+	return drawingBoardWindow && !drawingBoardWindow.isDestroyed() ? drawingBoardWindow : null;
+}
+
+export function closeDrawingBoardWindow(): void {
+	if (drawingBoardWindow && !drawingBoardWindow.isDestroyed()) {
+		drawingBoardWindow.close();
+		drawingBoardWindow = null;
 	}
 }

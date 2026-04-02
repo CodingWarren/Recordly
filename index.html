@@ -5,10 +5,21 @@
     <link rel="icon" type="image/png" href="/app-icons/recordly-32.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Recordly</title>
+    <script>
+      // Polyfill process for packages like @excalidraw/excalidraw that expect a Node.js environment
+      if (typeof globalThis.process === 'undefined') {
+        globalThis.process = {
+          env: { NODE_ENV: 'production' },
+          platform: 'browser',
+          version: '',
+          browser: true,
+          nextTick: function(fn) { setTimeout(fn, 0); },
+        };
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

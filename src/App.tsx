@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { CountdownOverlay } from "./components/countdown/CountdownOverlay";
+import { DrawingBoardWindow } from "./components/drawing-board/DrawingBoardWindow";
 import { LaunchWindow } from "./components/launch/LaunchWindow";
 import { SourceSelector } from "./components/launch/SourceSelector";
 import { UpdateToastWindow } from "./components/launch/UpdateToastWindow";
@@ -26,6 +27,7 @@ export default function App() {
 			type === "hud-overlay" ||
 			type === "source-selector" ||
 			type === "countdown" ||
+			type === "drawing-board" ||
 			(type === "update-toast" && isMacOS)
 		) {
 			document.body.style.background = "transparent";
@@ -42,6 +44,16 @@ export default function App() {
 			document.documentElement.style.overflow = "visible";
 			document.body.style.overflow = "visible";
 			document.getElementById("root")?.style.setProperty("overflow", "visible");
+		}
+
+		if (type === "drawing-board") {
+			const handleKeyDown = (event: KeyboardEvent) => {
+				if (event.key === "Escape") {
+					void window.electronAPI?.closeDrawingBoard?.();
+				}
+			};
+			document.addEventListener("keydown", handleKeyDown);
+			return () => document.removeEventListener("keydown", handleKeyDown);
 		}
 
 		loadAllCustomFonts().catch((error) => {
@@ -70,6 +82,8 @@ export default function App() {
 			return <CountdownOverlay />;
 		case "update-toast":
 			return <UpdateToastWindow />;
+		case "drawing-board":
+			return <DrawingBoardWindow />;
 		case "editor":
 			return (
 				<ShortcutsProvider>

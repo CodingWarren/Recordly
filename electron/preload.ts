@@ -962,6 +962,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	muxNativeWindowsRecording: (expectedDurationMs?: number) =>
 		ipcRenderer.invoke("mux-native-windows-recording", expectedDurationMs),
 	hideOsCursor: () => ipcRenderer.invoke("hide-cursor"),
+	showOsCursor: () => ipcRenderer.invoke("show-cursor"),
 	getAppVersion: () => ipcRenderer.invoke("app:getVersion"),
 	getRecordingPreferences: () => ipcRenderer.invoke("get-recording-preferences"),
 	getRecordingAudioLabConfig: () => ipcRenderer.invoke("get-recording-audio-lab-config"),
@@ -980,6 +981,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		ipcRenderer.on("countdown-tick", listener);
 		return () => ipcRenderer.removeListener("countdown-tick", listener);
 	},
+	openDrawingBoard: () => ipcRenderer.invoke("open-drawing-board"),
+	closeDrawingBoard: () => ipcRenderer.invoke("close-drawing-board"),
+	getDrawingBoardData: () => ipcRenderer.invoke("get-drawing-board-data"),
+	setDrawingBoardData: (data: string) => ipcRenderer.invoke("set-drawing-board-data", data),
+	clearDrawingBoardData: () => ipcRenderer.invoke("clear-drawing-board-data"),
+	getDrawingBoardWindowSourceId: () => ipcRenderer.invoke("get-drawing-board-window-source-id"),
 
 	// ── Extensions ──────────────────────────────────────────────────────
 	extensionsDiscover: () => ipcRenderer.invoke("extensions:discover"),

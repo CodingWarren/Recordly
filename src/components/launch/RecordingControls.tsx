@@ -1,4 +1,13 @@
-import { MicrophoneIcon, MicrophoneSlashIcon, MinusIcon, PauseIcon, PlayIcon, SquareIcon, XIcon } from "@phosphor-icons/react";
+import {
+	MicrophoneIcon,
+	MicrophoneSlashIcon,
+	MinusIcon,
+	PauseIcon,
+	PencilLineIcon,
+	PlayIcon,
+	SquareIcon,
+	XIcon,
+} from "@phosphor-icons/react";
 import { useMemo } from "react";
 import { useScopedT } from "@/contexts/I18nContext";
 import { Button } from "@/components/ui/button";
@@ -12,6 +21,7 @@ interface RecordingControlsProps {
 	onToggleMicrophone: () => void;
 	onPauseResume: () => void;
 	onStopRecording: () => void;
+	onOpenDrawingBoard: () => void;
 	onHideHud: () => void;
 	onCancelRecording: () => void;
 	formatTime: (seconds: number) => string;
@@ -24,6 +34,7 @@ export const RecordingControls = ({
 	onToggleMicrophone,
 	onPauseResume,
 	onStopRecording,
+	onOpenDrawingBoard,
 	onHideHud,
 	onCancelRecording,
 	formatTime,
@@ -98,6 +109,17 @@ export const RecordingControls = ({
 					variant="ghost"
 					size="icon"
 					iconSize="lg"
+					onClick={onOpenDrawingBoard}
+					title={t("recording.openDrawingBoard", "Open drawing board")}
+					aria-label={t("recording.openDrawingBoard", "Open drawing board")}
+				>
+					<PencilLineIcon size={18} />
+				</Button>
+
+				<Button
+					variant="ghost"
+					size="icon"
+					iconSize="lg"
 					onClick={onStopRecording}
 					title={t("recording.stop")}
 					aria-label={t("recording.stop")}
@@ -136,6 +158,7 @@ export const RecordingControls = ({
 		onToggleMicrophone,
 		onPauseResume,
 		onStopRecording,
+		onOpenDrawingBoard,
 		onHideHud,
 		onCancelRecording,
 		formatTime,

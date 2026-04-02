@@ -33,6 +33,8 @@ import {
 	type CropRegion,
 	type CursorClickEffectStyle,
 	type CursorStyle,
+	type DrawingRegion,
+	DEFAULT_DRAWING_REGION_OPACITY,
 	DEFAULT_ANNOTATION_POSITION,
 	DEFAULT_ANNOTATION_SIZE,
 	DEFAULT_ANNOTATION_STYLE,
@@ -138,6 +140,7 @@ export interface ProjectEditorState {
 	speedRegions: SpeedRegion[];
 	annotationRegions: AnnotationRegion[];
 	audioRegions: AudioRegion[];
+	drawingRegions: DrawingRegion[];
 	autoCaptions: CaptionCue[];
 	autoCaptionSettings: AutoCaptionSettings;
 	webcam: WebcamOverlaySettings;
@@ -663,6 +666,35 @@ export function normalizeProjectEditor(editor: Partial<ProjectEditorState>): Pro
 				})
 		: [];
 
+	const normalizedDrawingRegions: DrawingRegion[] = Array.isArray(editor.drawingRegions)
+		? editor.drawingRegions
+				.filter(
+					(region): region is DrawingRegion => Boolean(region && typeof region.id === "string"),
+				)
+				.map((region) => {
+					const rawStart = isFiniteNumber(region.startMs) ? Math.round(region.startMs) : 0;
+					const rawEnd = isFiniteNumber(region.endMs)
+						? Math.round(region.endMs)
+						: rawStart + 5000;
+					const startMs = Math.max(0, Math.min(rawStart, rawEnd));
+					const endMs = Math.max(startMs + 1, rawEnd);
+					return {
+						id: region.id,
+						startMs,
+						endMs,
+						excalidrawData:
+							typeof region.excalidrawData === "string" ? region.excalidrawData : "{}",
+						svgSnapshot:
+							typeof region.svgSnapshot === "string" ? region.svgSnapshot : undefined,
+						opacity: isFiniteNumber(region.opacity)
+							? clamp(region.opacity, 0, 1)
+							: DEFAULT_DRAWING_REGION_OPACITY,
+						animateStrokes:
+							typeof region.animateStrokes === "boolean" ? region.animateStrokes : false,
+					};
+				})
+		: [];
+
 	const normalizedAudioRegions: AudioRegion[] = Array.isArray(
 		(editor as Partial<ProjectEditorState>).audioRegions,
 	)
@@ -993,6 +1025,7 @@ export function normalizeProjectEditor(editor: Partial<ProjectEditorState>): Pro
 		speedRegions: normalizedSpeedRegions,
 		annotationRegions: normalizedAnnotationRegions,
 		audioRegions: normalizedAudioRegions,
+		drawingRegions: normalizedDrawingRegions,
 		autoCaptions: normalizedAutoCaptions,
 		autoCaptionSettings: normalizedAutoCaptionSettings,
 		webcam: {

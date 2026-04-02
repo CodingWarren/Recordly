@@ -56,6 +56,10 @@ import {
 	writeRecordingDiagnosticsSnapshot,
 } from "../recording/diagnostics";
 import {
+	resetDrawingBoardRecordingState,
+	resolveDrawingBoardMuxVideoPath,
+} from "./drawingBoard";
+import {
 	buildFfmpegCaptureArgs,
 	waitForFfmpegCaptureStart,
 	waitForFfmpegCaptureStop,
@@ -1418,10 +1422,12 @@ export function registerRecordingHandlers(
 			}
 
 			try {
-				await writeWindowsRecordingDiagnostics(videoPath, {
+				const finalVideoPath = await resolveDrawingBoardMuxVideoPath(videoPath);
+
+				await writeWindowsRecordingDiagnostics(finalVideoPath, {
 					phase: "mux-start",
 					expectedDurationMs,
-					outputPath: videoPath,
+					outputPath: finalVideoPath,
 					systemAudioPath: diagnosticsSystemAudioPath,
 					microphonePath: diagnosticsMicAudioPath,
 					details: {
@@ -1435,7 +1441,7 @@ export function registerRecordingHandlers(
 				let muxDetails: unknown = null;
 				if (diagnosticsSystemAudioPath || diagnosticsMicAudioPath) {
 					muxDetails = await muxNativeWindowsVideoWithAudio(
-						videoPath,
+						finalVideoPath,
 						diagnosticsSystemAudioPath,
 						diagnosticsMicAudioPath,
 					);
@@ -1446,24 +1452,25 @@ export function registerRecordingHandlers(
 				recordNativeCaptureDiagnostics({
 					backend: "windows-wgc",
 					phase: "mux",
-					outputPath: videoPath,
-					fileSizeBytes: await getFileSizeIfPresent(videoPath),
+					outputPath: finalVideoPath,
+					fileSizeBytes: await getFileSizeIfPresent(finalVideoPath),
 				});
-				await writeWindowsRecordingDiagnostics(videoPath, {
+				await writeWindowsRecordingDiagnostics(finalVideoPath, {
 					phase: "mux-complete",
 					expectedDurationMs,
-					outputPath: videoPath,
+					outputPath: finalVideoPath,
 					systemAudioPath: diagnosticsSystemAudioPath,
 					microphonePath: diagnosticsMicAudioPath,
 					details: {
-						fileSizeBytes: await getFileSizeIfPresent(videoPath),
+						fileSizeBytes: await getFileSizeIfPresent(finalVideoPath),
 						mux: muxDetails,
 					},
 				});
 				await cleanupWindowsOrphanedMicAudioPath(orphanedMicAudioPath);
-				return await finalizeStoredVideo(videoPath);
+				return await finalizeStoredVideo(finalVideoPath);
 			} catch (error) {
 				console.error("Failed to mux native Windows recording:", error);
+				resetDrawingBoardRecordingState();
 				recordNativeCaptureDiagnostics({
 					backend: "windows-wgc",
 					phase: "mux",
