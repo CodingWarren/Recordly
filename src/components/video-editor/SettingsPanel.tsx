@@ -1,4 +1,4 @@
-import { Palette, Trash2, Upload, X } from "lucide-react";
+import { Film, Palette, Trash2, Upload, X } from "lucide-react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -15,7 +15,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { getAssetPath, getRenderableAssetUrl } from "@/lib/assetPath";
 import { cn } from "@/lib/utils";
 import type { BuiltInWallpaper } from "@/lib/wallpapers";
-import { BUILT_IN_WALLPAPERS, getAvailableWallpapers } from "@/lib/wallpapers";
+import { BUILT_IN_WALLPAPERS, getAvailableWallpapers, isVideoWallpaperSource } from "@/lib/wallpapers";
 import { type AspectRatio } from "@/utils/aspectRatioUtils";
 import minimalCursorUrl from "../../../Minimal Cursor.svg";
 import amongusCursorUrl from "../../assets/cursors/amongus/default.png";
@@ -105,7 +105,7 @@ const CAPTION_ANIMATION_OPTIONS: Array<{ value: AutoCaptionAnimation; label: str
 	{ value: "pop", label: "Pop" },
 ];
 
-type BackgroundTab = "image" | "color" | "gradient";
+type BackgroundTab = "image" | "video" | "color" | "gradient";
 export type EditorEffectSection =
 	| "scene"
 	| "cursor"
@@ -128,6 +128,10 @@ function getBackgroundTabForWallpaper(value: string): BackgroundTab {
 		return "color";
 	}
 
+	if (isVideoWallpaperSource(value)) {
+		return "video";
+	}
+
 	return "image";
 }
 
@@ -148,6 +152,10 @@ interface SettingsPanelProps {
 	onZoomDelete?: (id: string) => void;
 	selectedTrimId?: string | null;
 	onTrimDelete?: (id: string) => void;
+	selectedClipId?: string | null;
+	selectedClipSpeed?: number | null;
+	onClipSpeedChange?: (speed: number) => void;
+	onClipDelete?: (id: string) => void;
 	shadowIntensity?: number;
 	onShadowChange?: (intensity: number) => void;
 	backgroundBlur?: number;
@@ -503,6 +511,10 @@ export function SettingsPanel({
 	onZoomDelete,
 	selectedTrimId,
 	onTrimDelete,
+	selectedClipId,
+	selectedClipSpeed,
+	onClipSpeedChange,
+	onClipDelete,
 	shadowIntensity = 0.67,
 	onShadowChange,
 	backgroundBlur = 0,
@@ -705,7 +717,18 @@ export function SettingsPanel({
 		if (selected.startsWith("data:image") && !customImages.includes(selected)) {
 			setCustomImages((prev) => [selected, ...prev]);
 		}
-	}, [customImages, selected]);
+
+		const isBuiltInWallpaper =
+			builtInWallpaperPaths.includes(selected) || wallpaperPreviewPaths.includes(selected);
+
+		if (
+			!isBuiltInWallpaper &&
+			isVideoWallpaperSource(selected) &&
+			!customImages.includes(selected)
+		) {
+			setCustomImages((prev) => [selected, ...prev]);
+		}
+	}, [builtInWallpaperPaths, customImages, selected, wallpaperPreviewPaths]);
 
 	useEffect(() => {
 		saveEditorPreferences({ customWallpapers: customImages });
@@ -759,7 +782,7 @@ export function SettingsPanel({
 		);
 
 	const renderWallpaperImageTile = (
-		imageUrl: string,
+		wallpaperUrl: string,
 		isSelected: boolean,
 		props?: {
 			key?: string;
@@ -778,16 +801,25 @@ export function SettingsPanel({
 			role="button"
 		>
 			<div className="absolute inset-[1px] overflow-hidden rounded-[8px] bg-[#0d0e11]">
-				<img
-					src={imageUrl}
-					alt={
-						props?.title ??
-						props?.ariaLabel ??
-						tSettings("background.wallpaperPreview", "Wallpaper preview")
-					}
-					className="h-full w-full select-none object-cover [transform:translateZ(0)]"
-					draggable={false}
-				/>
+				{isVideoWallpaperSource(wallpaperUrl) ? (
+					<div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-[radial-gradient(circle_at_top,#1f3b68,transparent_58%),linear-gradient(135deg,#0f172a,#111827_48%,#1d4ed8)] px-1 text-center text-white">
+						<Film className="h-4 w-4 opacity-90" />
+						<span className="line-clamp-2 text-[8px] font-medium leading-tight text-white/80">
+							{props?.title ?? props?.ariaLabel ?? tSettings("background.video", "Video background")}
+						</span>
+					</div>
+				) : (
+					<img
+						src={wallpaperUrl}
+						alt={
+							props?.title ??
+							props?.ariaLabel ??
+							tSettings("background.wallpaperPreview", "Wallpaper preview")
+						}
+						className="h-full w-full select-none object-cover [transform:translateZ(0)]"
+						draggable={false}
+					/>
+				)}
 			</div>
 			{props?.children}
 		</div>
@@ -803,6 +835,12 @@ export function SettingsPanel({
 	const handleTrimDeleteClick = () => {
 		if (selectedTrimId && onTrimDelete) {
 			onTrimDelete(selectedTrimId);
+		}
+	};
+
+	const handleClipDeleteClick = () => {
+		if (selectedClipId && onClipDelete) {
+			onClipDelete(selectedClipId);
 		}
 	};
 
@@ -986,10 +1024,11 @@ export function SettingsPanel({
 
 			<div className="w-full">
 				<LayoutGroup id="background-picker-switcher">
-					<div className="grid h-8 w-full grid-cols-3 rounded-xl border border-white/10 bg-white/[0.04] p-1">
+					<div className="grid h-8 w-full grid-cols-4 rounded-xl border border-white/10 bg-white/[0.04] p-1">
 						{(
 							[
 								{ value: "image", label: tSettings("background.image") },
+								{ value: "video", label: tSettings("background.video", "Video") },
 								{ value: "color", label: tSettings("background.color") },
 								{ value: "gradient", label: tSettings("background.gradient") },
 							] as const
@@ -1055,6 +1094,12 @@ export function SettingsPanel({
 											const isSelected = getWallpaperTileState(imageUrl);
 											return renderWallpaperImageTile(imageUrl, isSelected, {
 												key: `custom-${idx}`,
+												ariaLabel: isVideoWallpaperSource(imageUrl)
+													? imageUrl.split(/[\\/]/).pop() ?? tSettings("background.video", "Video background")
+													: undefined,
+												title: isVideoWallpaperSource(imageUrl)
+													? imageUrl.split(/[\\/]/).pop()
+													: undefined,
 												onClick: () => onWallpaperChange(imageUrl),
 												children: (
 													<button
@@ -1083,6 +1128,10 @@ export function SettingsPanel({
 											});
 										})}
 									</div>
+								</div>
+							) : backgroundTab === "video" ? (
+								<div className="mt-0 flex min-h-24 items-center justify-center rounded-xl border border-dashed border-white/10 bg-white/[0.03] text-[11px] text-slate-400">
+									Video backgrounds coming next.
 								</div>
 							) : backgroundTab === "color" ? (
 								<div className="mt-0 space-y-2">
@@ -1184,7 +1233,7 @@ export function SettingsPanel({
 
 	if (isBackgroundPanel) {
 		return (
-			<div className="flex-[2] min-w-[280px] max-w-[332px] bg-[#161619] border border-white/10 rounded-2xl flex flex-col shadow-xl h-full overflow-hidden">
+			<div className="flex-[2] w-[332px] min-w-[280px] max-w-[332px] bg-[#161619] border border-white/10 rounded-2xl flex flex-col shadow-xl h-full overflow-hidden">
 				<div className="flex-1 overflow-y-auto custom-scrollbar p-4">
 					<div className="mb-4 flex items-center gap-2">
 						<Palette className="w-4 h-4 text-[#2563EB]" />
@@ -1934,8 +1983,8 @@ export function SettingsPanel({
 	})();
 
 	return (
-		<div className="basis-[332px] min-w-[280px] max-w-[332px] bg-[#161619] border border-white/10 rounded-2xl flex flex-col shadow-xl h-full overflow-hidden shrink-0">
-			<div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 pb-0">
+		<div className="flex-[2] w-[332px] min-w-[280px] max-w-[332px] bg-[#161619] border border-white/10 rounded-2xl flex flex-col shadow-xl h-full overflow-hidden">
+			<div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 pb-0" style={{ scrollbarGutter: 'stable' }}>
 				<AnimatePresence mode="wait" initial={false}>
 					<motion.div
 						key={activeEffectSection}
@@ -1951,7 +2000,7 @@ export function SettingsPanel({
 
 			<div className={cn(
 				"flex-shrink-0 border-t border-white/10 bg-[#151518] p-4 pt-3",
-				!selectedZoomId && !selectedTrimId && !selectedSpeedId && "hidden"
+				!selectedZoomId && !selectedTrimId && !selectedSpeedId && !selectedClipId && "hidden"
 			)}>
 				{selectedZoomId && (
 					<div className="mb-4">
@@ -2052,6 +2101,57 @@ export function SettingsPanel({
 						>
 							<Trash2 className="h-3 w-3" />
 							{tSettings("speed.deleteRegion")}
+						</Button>
+					</div>
+				)}
+
+				{selectedClipId && (
+					<div className="mb-4">
+						<div className="mb-3 flex items-center justify-between">
+							<span className="text-sm font-medium text-slate-200">Clip Speed</span>
+							{selectedClipSpeed != null && selectedClipSpeed !== 1 && (
+								<span className="rounded-full bg-[#06b6d4]/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-[#06b6d4]">
+									{selectedClipSpeed}×
+								</span>
+							)}
+						</div>
+						<div className="grid grid-cols-8 gap-1.5">
+							{[
+								{ speed: 0.25, label: "0.25×" },
+								{ speed: 0.5, label: "0.5×" },
+								{ speed: 0.75, label: "0.75×" },
+								{ speed: 1, label: "1×" },
+								{ speed: 1.25, label: "1.25×" },
+								{ speed: 1.5, label: "1.5×" },
+								{ speed: 1.75, label: "1.75×" },
+								{ speed: 2, label: "2×" },
+							].map((option) => {
+								const isActive = selectedClipSpeed === option.speed;
+								return (
+									<Button
+										key={option.speed}
+										type="button"
+										onClick={() => onClipSpeedChange?.(option.speed)}
+										className={cn(
+											"h-auto w-full rounded-lg border px-0.5 py-2 text-center shadow-sm transition-all duration-200 ease-out cursor-pointer",
+											isActive
+												? "border-[#06b6d4] bg-[#06b6d4] text-white"
+												: "border-white/5 bg-white/5 text-slate-400 hover:bg-white/10 hover:border-white/10 hover:text-slate-200",
+										)}
+									>
+										<span className="text-[10px] font-semibold">{option.label}</span>
+									</Button>
+								);
+							})}
+						</div>
+						<Button
+							onClick={handleClipDeleteClick}
+							variant="destructive"
+							size="sm"
+							className="mt-2 h-8 w-full gap-2 border border-red-500/20 bg-red-500/10 text-xs text-red-400 transition-all hover:border-red-500/30 hover:bg-red-500/20"
+						>
+							<Trash2 className="h-3 w-3" />
+							Delete Clip
 						</Button>
 					</div>
 				)}

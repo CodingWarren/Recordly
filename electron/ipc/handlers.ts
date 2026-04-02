@@ -34,6 +34,10 @@ const RECORDING_SESSION_MANIFEST_SUFFIX = '.recordly-session.json'
 const WHISPER_MODEL_DOWNLOAD_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin'
 const WHISPER_MODEL_DIR = path.join(USER_DATA_PATH, 'whisper')
 const WHISPER_SMALL_MODEL_PATH = path.join(WHISPER_MODEL_DIR, 'ggml-small.bin')
+const COMPANION_AUDIO_LAYOUTS = [
+  { platform: 'mac' as const, systemSuffix: '.system.m4a', micSuffix: '.mic.m4a' },
+  { platform: 'win' as const, systemSuffix: '.system.wav', micSuffix: '.mic.wav' },
+]
 
 function getAssetRootPath() {
   if (app.isPackaged) {
@@ -319,6 +323,77 @@ function parseFfmpegDurationSeconds(stderr: string) {
   }
 
   return hours * 3600 + minutes * 60 + seconds
+}
+
+type CompanionAudioCandidate = {
+  platform: (typeof COMPANION_AUDIO_LAYOUTS)[number]['platform']
+  systemPath: string
+  micPath: string
+  usablePaths: string[]
+}
+
+async function getUsableCompanionAudioCandidates(videoPath: string): Promise<CompanionAudioCandidate[]> {
+  const basePath = videoPath.replace(/\.[^.]+$/u, '')
+  const candidates: CompanionAudioCandidate[] = []
+
+  for (const layout of COMPANION_AUDIO_LAYOUTS) {
+    const systemPath = `${basePath}${layout.systemSuffix}`
+    const micPath = `${basePath}${layout.micSuffix}`
+    const usablePaths: string[] = []
+
+    for (const companionPath of [systemPath, micPath]) {
+      try {
+        const stat = await fs.stat(companionPath)
+        if (stat.size > 0) {
+          usablePaths.push(companionPath)
+        }
+      } catch {
+        // Missing companion audio is expected for many recordings.
+      }
+    }
+
+    if (usablePaths.length > 0) {
+      candidates.push({
+        platform: layout.platform,
+        systemPath,
+        micPath,
+        usablePaths,
+      })
+    }
+  }
+
+  return candidates
+}
+
+async function hasEmbeddedAudioStream(videoPath: string) {
+  const ffmpegPath = getFfmpegBinaryPath()
+  let stderr = ''
+
+  try {
+    const result = await execFileAsync(
+      ffmpegPath,
+      ['-hide_banner', '-i', videoPath, '-map', '0:a:0', '-frames:a', '1', '-f', 'null', '-'],
+      { timeout: 20000, maxBuffer: 10 * 1024 * 1024 },
+    )
+    stderr = result.stderr
+  } catch (error) {
+    stderr = (error as NodeJS.ErrnoException & { stderr?: string }).stderr ?? ''
+  }
+
+  return /Stream #.*Audio:/i.test(stderr)
+}
+
+async function getCompanionAudioFallbackPaths(videoPath: string) {
+  const companionCandidates = await getUsableCompanionAudioCandidates(videoPath)
+  if (companionCandidates.length === 0) {
+    return []
+  }
+
+  if (await hasEmbeddedAudioStream(videoPath)) {
+    return []
+  }
+
+  return companionCandidates.flatMap((candidate) => candidate.usablePaths)
 }
 
 async function validateRecordedVideo(videoPath: string) {
@@ -792,6 +867,11 @@ async function pruneAutoRecordings(exemptPaths: string[] = []) {
     try {
       await fs.rm(entry.filePath, { force: true })
       await fs.rm(getTelemetryPathForVideo(entry.filePath), { force: true })
+      // Clean up companion audio files left from recording (macOS .m4a, Windows .wav)
+      const base = entry.filePath.replace(/\.(mp4|mov|webm)$/i, '')
+      for (const suffix of ['.system.m4a', '.mic.m4a', '.system.wav', '.mic.wav']) {
+        await fs.rm(base + suffix, { force: true }).catch(() => {})
+      }
     } catch (error) {
       console.warn('Failed to prune old auto recording:', entry.filePath, error)
     }
@@ -1096,6 +1176,38 @@ function getFfmpegBinaryPath() {
   }
 
   return ffmpegStatic
+}
+
+/** Probe the duration of a media file (in seconds) using ffmpeg. */
+async function probeMediaDurationSeconds(filePath: string): Promise<number> {
+  const ffmpegPath = getFfmpegBinaryPath()
+  try {
+    await execFileAsync(ffmpegPath, ['-i', filePath, '-f', 'null', '-'], { timeout: 30000, maxBuffer: 2 * 1024 * 1024 })
+  } catch (error) {
+    // ffmpeg reports info on stderr even on "success" — parse it from the error
+    const stderr = (error as NodeJS.ErrnoException & { stderr?: string })?.stderr ?? ''
+    // Match "Duration: HH:MM:SS.mm" or "time=HH:MM:SS.mm" (from progress output)
+    // Prefer the last "time=" value (actual decoded duration) over the container Duration header
+    const timeMatches = [...stderr.matchAll(/time=(\d{2}):(\d{2}):(\d{2})\.(\d{2,3})/g)]
+    if (timeMatches.length > 0) {
+      const last = timeMatches[timeMatches.length - 1]
+      const h = Number(last[1])
+      const m = Number(last[2])
+      const s = Number(last[3])
+      const frac = Number(last[4]) / (last[4].length === 3 ? 1000 : 100)
+      return h * 3600 + m * 60 + s + frac
+    }
+    // Fall back to Duration header
+    const durationMatch = stderr.match(/Duration:\s*(\d{2}):(\d{2}):(\d{2})\.(\d{2,3})/)
+    if (durationMatch) {
+      const h = Number(durationMatch[1])
+      const m = Number(durationMatch[2])
+      const s = Number(durationMatch[3])
+      const frac = Number(durationMatch[4]) / (durationMatch[4].length === 3 ? 1000 : 100)
+      return h * 3600 + m * 60 + s + frac
+    }
+  }
+  return 0
 }
 
 function sendWhisperModelDownloadProgress(
@@ -2078,31 +2190,48 @@ async function muxNativeWindowsVideoWithAudio(videoPath: string, systemAudioPath
   const ffmpegPath = getFfmpegBinaryPath()
   const inputs: string[] = ['-i', videoPath]
   const audioInputs: string[] = []
+  const audioFilePaths: string[] = []
 
-  if (systemAudioPath) {
+  for (const [label, audioPath] of [['system', systemAudioPath], ['mic', micAudioPath]] as const) {
+    if (!audioPath) continue
     try {
-      await fs.access(systemAudioPath)
-      inputs.push('-i', systemAudioPath)
-      audioInputs.push('system')
+      const stat = await fs.stat(audioPath)
+      if (stat.size <= 0) {
+        console.warn(`[mux-win] Skipping ${label} audio: file is empty (${audioPath})`)
+        await fs.rm(audioPath, { force: true }).catch(() => {})
+        continue
+      }
+      inputs.push('-i', audioPath)
+      audioInputs.push(label)
+      audioFilePaths.push(audioPath)
     } catch {
-      // system audio file not available
-    }
-  }
-
-  if (micAudioPath) {
-    try {
-      await fs.access(micAudioPath)
-      inputs.push('-i', micAudioPath)
-      audioInputs.push('mic')
-    } catch {
-      // mic audio file not available
+      console.warn(`[mux-win] Skipping ${label} audio: file not accessible (${audioPath})`)
     }
   }
 
   if (audioInputs.length === 0) return
 
+  // Probe durations to compute audio delay offsets.
+  // If an audio file is shorter than the video it means the audio device
+  // started delivering samples late (common with Bluetooth / iPhone mics).
+  const videoDuration = await probeMediaDurationSeconds(videoPath)
+  const audioDelays: Map<string, number> = new Map()
+
+  if (videoDuration > 0) {
+    for (let i = 0; i < audioFilePaths.length; i++) {
+      const audioDuration = await probeMediaDurationSeconds(audioFilePaths[i])
+      const delayMs = audioDuration > 0 ? Math.max(0, Math.round((videoDuration - audioDuration) * 1000)) : 0
+      audioDelays.set(audioInputs[i], delayMs)
+      if (delayMs > 0) {
+        console.log(`[mux-win] ${audioInputs[i]} audio is ${(delayMs / 1000).toFixed(2)}s shorter than video — adding ${delayMs}ms delay`)
+      }
+    }
+  }
+
   const mixedOutputPath = `${videoPath}.muxed.mp4`
   const normalizedPauseSegments = normalizePauseSegments(pauseSegments)
+  const systemDelayMs = audioDelays.get('system') ?? 0
+  const micDelayMs = audioDelays.get('mic') ?? 0
 
   if (audioInputs.length === 2) {
     // Both system + mic audio: mix them
@@ -2117,8 +2246,22 @@ async function muxNativeWindowsVideoWithAudio(videoPath: string, systemAudioPath
       filterParts.push(micPauseFilter)
     }
 
-    filterParts.push(`${micPauseFilter ? '[mic_trimmed]' : '[2:a]'}atrim=start=0.10,asetpts=PTS-STARTPTS[m]`)
-    filterParts.push(`${systemPauseFilter ? '[system_trimmed]' : '[1:a]'}[m]amix=inputs=2:duration=longest:normalize=0[aout]`)
+    const systemLabel = systemPauseFilter ? '[system_trimmed]' : '[1:a]'
+    const micLabel = micPauseFilter ? '[mic_trimmed]' : '[2:a]'
+
+    // Apply delay to compensate for late audio start
+    if (micDelayMs > 0) {
+      filterParts.push(`${micLabel}adelay=${micDelayMs}|${micDelayMs},asetpts=PTS-STARTPTS[m]`)
+    } else {
+      filterParts.push(`${micLabel}asetpts=PTS-STARTPTS[m]`)
+    }
+
+    if (systemDelayMs > 0) {
+      filterParts.push(`${systemLabel}adelay=${systemDelayMs}|${systemDelayMs},asetpts=PTS-STARTPTS[s]`)
+      filterParts.push(`[s][m]amix=inputs=2:duration=longest:normalize=0[aout]`)
+    } else {
+      filterParts.push(`${systemLabel}[m]amix=inputs=2:duration=longest:normalize=0[aout]`)
+    }
 
     await execFileAsync(
       ffmpegPath,
@@ -2139,35 +2282,52 @@ async function muxNativeWindowsVideoWithAudio(videoPath: string, systemAudioPath
   } else {
     // Single audio track
     const pauseFilter = buildPausedAudioFilter('1:a', 'aout', normalizedPauseSegments)
+    const singleDelayMs = audioDelays.get(audioInputs[0]) ?? 0
 
-    await execFileAsync(
-      ffmpegPath,
-      pauseFilter
-        ? [
-            '-y',
-            ...inputs,
-            '-filter_complex', pauseFilter,
-            '-map', '0:v:0',
-            '-map', '[aout]',
-            '-c:v', 'copy',
-            '-c:a', 'aac',
-            '-b:a', '192k',
-            '-shortest',
-            mixedOutputPath,
-          ]
-        : [
-            '-y',
-            ...inputs,
-            '-map', '0:v:0',
-            '-map', '1:a:0',
-            '-c:v', 'copy',
-            '-c:a', 'aac',
-            '-b:a', '192k',
-            '-shortest',
-            mixedOutputPath,
-          ],
-      { timeout: 120000, maxBuffer: 10 * 1024 * 1024 },
-    )
+    if (pauseFilter || singleDelayMs > 0) {
+      const filterParts: string[] = []
+      if (pauseFilter) {
+        filterParts.push(pauseFilter)
+      }
+      const srcLabel = pauseFilter ? '[aout]' : '[1:a]'
+      if (singleDelayMs > 0) {
+        filterParts.push(`${srcLabel}adelay=${singleDelayMs}|${singleDelayMs},asetpts=PTS-STARTPTS[delayed]`)
+      }
+      const outLabel = singleDelayMs > 0 ? '[delayed]' : '[aout]'
+
+      await execFileAsync(
+        ffmpegPath,
+        [
+          '-y',
+          ...inputs,
+          '-filter_complex', filterParts.join(';'),
+          '-map', '0:v:0',
+          '-map', outLabel,
+          '-c:v', 'copy',
+          '-c:a', 'aac',
+          '-b:a', '192k',
+          '-shortest',
+          mixedOutputPath,
+        ],
+        { timeout: 120000, maxBuffer: 10 * 1024 * 1024 },
+      )
+    } else {
+      await execFileAsync(
+        ffmpegPath,
+        [
+          '-y',
+          ...inputs,
+          '-map', '0:v:0',
+          '-map', '1:a:0',
+          '-c:v', 'copy',
+          '-c:a', 'aac',
+          '-b:a', '192k',
+          '-shortest',
+          mixedOutputPath,
+        ],
+        { timeout: 120000, maxBuffer: 10 * 1024 * 1024 },
+      )
+    }
   }
 
   await moveFileWithOverwrite(mixedOutputPath, videoPath)
@@ -2356,33 +2516,77 @@ async function muxNativeMacRecordingWithAudio(
 
   const inputs = ['-i', videoPath]
   const availableAudioInputs: string[] = []
+  const audioFilePaths: string[] = []
 
-  if (systemAudioPath) {
+  for (const [label, audioPath] of [['system', systemAudioPath], ['microphone', microphonePath]] as const) {
+    if (!audioPath) continue
     try {
-      await fs.access(systemAudioPath)
-      inputs.push('-i', systemAudioPath)
-      availableAudioInputs.push('system')
+      const stat = await fs.stat(audioPath)
+      if (stat.size <= 0) {
+        console.warn(`[mux] Skipping ${label} audio: file is empty (${audioPath})`)
+        await fs.rm(audioPath, { force: true }).catch(() => {})
+        continue
+      }
+      inputs.push('-i', audioPath)
+      availableAudioInputs.push(label)
+      audioFilePaths.push(audioPath)
     } catch {
-      // system audio file not available
-    }
-  }
-
-  if (microphonePath) {
-    try {
-      await fs.access(microphonePath)
-      inputs.push('-i', microphonePath)
-      availableAudioInputs.push('microphone')
-    } catch {
-      // microphone audio file not available
+      console.warn(`[mux] Skipping ${label} audio: file not accessible (${audioPath})`)
     }
   }
 
   if (availableAudioInputs.length === 0) {
+    console.warn('[mux] No valid audio files to mux')
     return
   }
 
-  const args = availableAudioInputs.length === 2
-    ? [
+  // Probe durations — if audio is shorter than video it means the audio device
+  // started late (e.g. iPhone mic over Continuity Camera). Add leading silence.
+  const videoDuration = await probeMediaDurationSeconds(videoPath)
+  const audioDelays: Map<string, number> = new Map()
+
+  if (videoDuration > 0) {
+    for (let i = 0; i < audioFilePaths.length; i++) {
+      const audioDuration = await probeMediaDurationSeconds(audioFilePaths[i])
+      const delayMs = audioDuration > 0 ? Math.max(0, Math.round((videoDuration - audioDuration) * 1000)) : 0
+      audioDelays.set(availableAudioInputs[i], delayMs)
+      if (delayMs > 0) {
+        console.log(`[mux] ${availableAudioInputs[i]} audio is ${(delayMs / 1000).toFixed(2)}s shorter than video — adding ${delayMs}ms delay`)
+      }
+    }
+  }
+
+  const systemDelayMs = audioDelays.get('system') ?? 0
+  const micDelayMs = audioDelays.get('microphone') ?? 0
+  const needsFilter = systemDelayMs > 0 || micDelayMs > 0
+
+  let args: string[]
+  if (availableAudioInputs.length === 2) {
+    if (needsFilter) {
+      const filterParts: string[] = []
+      if (systemDelayMs > 0) {
+        filterParts.push(`[1:a]adelay=${systemDelayMs}|${systemDelayMs},asetpts=PTS-STARTPTS[s]`)
+      }
+      if (micDelayMs > 0) {
+        filterParts.push(`[2:a]adelay=${micDelayMs}|${micDelayMs},asetpts=PTS-STARTPTS[m]`)
+      }
+      const sLabel = systemDelayMs > 0 ? '[s]' : '[1:a]'
+      const mLabel = micDelayMs > 0 ? '[m]' : '[2:a]'
+      filterParts.push(`${sLabel}${mLabel}amix=inputs=2:duration=longest:normalize=0[aout]`)
+      args = [
+        '-y',
+        ...inputs,
+        '-filter_complex', filterParts.join(';'),
+        '-map', '0:v:0',
+        '-map', '[aout]',
+        '-c:v', 'copy',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-shortest',
+        mixedOutputPath,
+      ]
+    } else {
+      args = [
         '-y',
         ...inputs,
         '-filter_complex', '[1:a][2:a]amix=inputs=2:duration=longest:normalize=0[aout]',
@@ -2394,7 +2598,24 @@ async function muxNativeMacRecordingWithAudio(
         '-shortest',
         mixedOutputPath,
       ]
-    : [
+    }
+  } else {
+    if (needsFilter) {
+      const delayMs = systemDelayMs || micDelayMs
+      args = [
+        '-y',
+        ...inputs,
+        '-filter_complex', `[1:a]adelay=${delayMs}|${delayMs},asetpts=PTS-STARTPTS[aout]`,
+        '-map', '0:v:0',
+        '-map', '[aout]',
+        '-c:v', 'copy',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-shortest',
+        mixedOutputPath,
+      ]
+    } else {
+      args = [
         '-y',
         ...inputs,
         '-map', '0:v:0',
@@ -2405,14 +2626,25 @@ async function muxNativeMacRecordingWithAudio(
         '-shortest',
         mixedOutputPath,
       ]
+    }
+  }
 
-  await execFileAsync(
-    ffmpegPath,
-    args,
-    { timeout: 120000, maxBuffer: 10 * 1024 * 1024 },
-  )
+  console.log('[mux] Running ffmpeg:', ffmpegPath, args.join(' '))
+
+  try {
+    await execFileAsync(
+      ffmpegPath,
+      args,
+      { timeout: 120000, maxBuffer: 10 * 1024 * 1024 },
+    )
+  } catch (error) {
+    const execError = error as NodeJS.ErrnoException & { stderr?: string }
+    console.error('[mux] ffmpeg failed:', execError.stderr || execError.message)
+    throw error
+  }
 
   await moveFileWithOverwrite(mixedOutputPath, videoPath)
+  console.log('[mux] Successfully muxed audio into video:', videoPath)
 
   for (const audioPath of [systemAudioPath, microphonePath]) {
     if (audioPath) {
@@ -2874,6 +3106,27 @@ function snapshotCursorTelemetryForPersistence() {
 }
 
 async function finalizeStoredVideo(videoPath: string) {
+  // Safety net: if companion audio files still exist, the mux was skipped — attempt it now
+  if (videoPath.endsWith('.mp4')) {
+    const companionCandidates = await getUsableCompanionAudioCandidates(videoPath)
+    for (const { systemPath, micPath, platform } of companionCandidates) {
+      if (platform === 'mac' || platform === 'win') {
+        console.log(`[finalize] Detected un-muxed ${platform} audio files alongside video — attempting safety-net mux`)
+        try {
+          if (platform === 'win') {
+            await muxNativeWindowsVideoWithAudio(videoPath, systemPath, micPath)
+          } else {
+            await muxNativeMacRecordingWithAudio(videoPath, systemPath, micPath)
+          }
+          console.log('[finalize] Safety-net mux completed successfully')
+        } catch (error) {
+          console.warn('[finalize] Safety-net mux failed:', error)
+        }
+        break
+      }
+    }
+  }
+
   let validation: { fileSizeBytes: number; durationSeconds: number | null } | null = null
   try {
     validation = await validateRecordedVideo(videoPath)
@@ -3969,9 +4222,11 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
       const preferredVideoPath = nativeCaptureTargetPath
       const preferredSystemAudioPath = nativeCaptureSystemAudioPath
       const preferredMicrophonePath = nativeCaptureMicrophonePath
+      console.log('[stop-native] Audio paths — system:', preferredSystemAudioPath, 'mic:', preferredMicrophonePath)
       nativeCaptureStopRequested = true
       process.stdin.write('stop\n')
       const tempVideoPath = await waitForNativeCaptureStop(process)
+      console.log('[stop-native] Helper stopped, tempVideoPath:', tempVideoPath)
       nativeCaptureProcess = null
       nativeScreenRecordingActive = false
       nativeCaptureTargetPath = null
@@ -3986,11 +4241,15 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
       }
 
       if (preferredSystemAudioPath || preferredMicrophonePath) {
+        console.log('[stop-native] Attempting audio mux (merging separate tracks) into:', finalVideoPath)
         try {
           await muxNativeMacRecordingWithAudio(finalVideoPath, preferredSystemAudioPath, preferredMicrophonePath)
+          console.log('[stop-native] Audio mux completed successfully')
         } catch (error) {
-          console.warn('Failed to mux native macOS audio into capture:', error)
+          console.warn('[stop-native] Audio mux failed (video still has inline audio):', error)
         }
+      } else {
+        console.log('[stop-native] No separate audio tracks to mux')
       }
 
       return await finalizeStoredVideo(finalVideoPath)
@@ -4174,6 +4433,19 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
 
   ipcMain.handle('get-last-native-capture-diagnostics', async () => {
     return { success: true, diagnostics: lastNativeCaptureDiagnostics }
+  })
+
+  ipcMain.handle('get-video-audio-fallback-paths', async (_event, videoPath: string) => {
+    if (!videoPath) {
+      return { success: true, paths: [] }
+    }
+
+    try {
+      return { success: true, paths: await getCompanionAudioFallbackPaths(videoPath) }
+    } catch (error) {
+      console.error('Failed to resolve companion audio fallback paths:', error)
+      return { success: false, paths: [], error: String(error) }
+    }
   })
 
   ipcMain.handle('mux-native-windows-recording', async (_event, pauseSegments?: PauseSegment[]) => {

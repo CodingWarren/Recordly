@@ -49,6 +49,7 @@ import {
 	getDefaultCaptionFontFamily,
 	type SpeedRegion,
 	type TrimRegion,
+	type ClipRegion,
 	type WebcamOverlaySettings,
 	type ZoomRegion,
 	type ZoomTransitionEasing,
@@ -84,6 +85,7 @@ export interface ProjectEditorState {
 	cropRegion: CropRegion;
 	zoomRegions: ZoomRegion[];
 	trimRegions: TrimRegion[];
+	clipRegions: ClipRegion[];
 	speedRegions: SpeedRegion[];
 	annotationRegions: AnnotationRegion[];
 	audioRegions: AudioRegion[];
@@ -291,6 +293,23 @@ export function normalizeProjectEditor(editor: Partial<ProjectEditorState>): Pro
 						id: region.id,
 						startMs,
 						endMs,
+					};
+				})
+		: [];
+
+	const normalizedClipRegions: ClipRegion[] = Array.isArray((editor as any).clipRegions)
+		? ((editor as any).clipRegions as ClipRegion[])
+				.filter((region): region is ClipRegion => Boolean(region && typeof region.id === "string"))
+				.map((region) => {
+					const rawStart = isFiniteNumber(region.startMs) ? Math.round(region.startMs) : 0;
+					const rawEnd = isFiniteNumber(region.endMs) ? Math.round(region.endMs) : rawStart + 1000;
+					const startMs = Math.max(0, Math.min(rawStart, rawEnd));
+					const endMs = Math.max(startMs + 1, rawEnd);
+					return {
+						id: region.id,
+						startMs,
+						endMs,
+						speed: isFiniteNumber((region as any).speed) ? (region as any).speed : 1,
 					};
 				})
 		: [];
@@ -622,6 +641,7 @@ export function normalizeProjectEditor(editor: Partial<ProjectEditorState>): Pro
 		},
 		zoomRegions: normalizedZoomRegions,
 		trimRegions: normalizedTrimRegions,
+		clipRegions: normalizedClipRegions,
 		speedRegions: normalizedSpeedRegions,
 		annotationRegions: normalizedAnnotationRegions,
 		audioRegions: normalizedAudioRegions,
