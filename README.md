@@ -65,6 +65,16 @@ Use drag-and-drop timeline tools for zooms, trims, speed regions, annotations, e
   <img src="./feature3.png" width="450" alt="Recordly timeline editor screenshot">
 </p>
 
+## Real-time Drawing Board (Excalidraw)
+Open a full-screen drawing overlay at any point during recording. Powered by [Excalidraw](https://excalidraw.com/), the drawing board lets you sketch diagrams, annotate interfaces, and draw flowcharts without leaving Recordly. All strokes are captured directly into the recording.
+
+- **Free-hand drawing, shapes, arrows, and text** — the full Excalidraw toolset
+- **Dark / light theme toggle** and optional grid mode
+- **Export canvas as PNG** at any time
+- **Persistent state** — drawing data is saved to the `.recordly` project file and restored on reopen
+- **Zero cursor ghost trails** — the board correctly handles screen vs. window recording to prevent infinite mirror artefacts
+- **Picture-in-Picture (PiP) for window recording** — the target window is shown as a live background inside the drawing board so WGC captures both content and drawings in one pass
+
 ---
 
 ## All Features
@@ -77,6 +87,7 @@ Use drag-and-drop timeline tools for zooms, trims, speed regions, annotations, e
 - Use native capture backends where supported
 - Resume editing from saved `.recordly` project files
 - Open existing recordings or existing project files from the app
+- **Open the Drawing Board overlay** during recording to annotate in real time with Excalidraw
 
 ### Timeline and Editing
 
@@ -136,6 +147,17 @@ Use drag-and-drop timeline tools for zooms, trims, speed regions, annotations, e
 - GIF size presets
 - Aspect ratio and output dimension controls
 - Reveal exported files in the system file manager
+
+### Drawing Board
+
+- Full-screen Excalidraw-powered drawing overlay, launchable during recording
+- Free-hand pen, lines, arrows, rectangles, ellipses, diamonds, and text
+- Dark and light theme, optional grid mode
+- Export canvas snapshot as PNG
+- Drawing state persisted to `.recordly` project files
+- Screen recording: transparent overlay — WGC captures the full display including drawings, no background video needed
+- Window recording: Picture-in-Picture — target window shown as live background, WGC records the composite frame
+- OS cursor hidden while the board is open to eliminate ghost-trail artefacts
 
 ### Workflow and Usability
 
@@ -320,6 +342,13 @@ Recordly combines a platform-specific capture layer with a renderer-driven edito
 **Projects**
 - `.recordly` files store the source media path plus editor state so work can be reopened later
 
+**Drawing Board**
+- A full-screen Excalidraw overlay that can be opened during recording
+- For screen recording, the board is a transparent window captured by WGC as part of the display — no background video, no mirror loop
+- For window recording, the target window is shown as a live PiP background inside the board; WGC records the composite frame
+- Drawing state is serialised and stored in `.recordly` project files
+- See [`DRAWING_BOARD_DEV_NOTES.md`](DRAWING_BOARD_DEV_NOTES.md) for architecture details
+
 ---
 
 # Contribution
@@ -377,4 +406,3 @@ Created by
 [@webadderall](https://x.com/webadderall)
 
 ---
-
