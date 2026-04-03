@@ -58,6 +58,7 @@ import {
 import {
 	resetDrawingBoardRecordingState,
 	resolveDrawingBoardMuxVideoPath,
+	setDrawingBoardRecordingSessionActive,
 } from "./drawingBoard";
 import {
 	buildFfmpegCaptureArgs,
@@ -1818,6 +1819,8 @@ export function registerRecordingHandlers(
 	});
 
 	ipcMain.handle("set-recording-state", (_, recording: boolean) => {
+		setDrawingBoardRecordingSessionActive(Boolean(recording));
+
 		if (recording) {
 			stopCursorCapture();
 			stopInteractionCapture();

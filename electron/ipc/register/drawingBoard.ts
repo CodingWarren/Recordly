@@ -38,6 +38,7 @@ import type { SelectedSource, WindowBounds } from "../types";
 import { getRecordingsDir, getScreen, moveFileWithOverwrite } from "../utils";
 
 let drawingBoardData: string | null = null;
+let isRecordingSessionActive = false;
 let drawingBoardRecordingActive = false;
 let drawingBoardPreRecordingVideoPath: string | null = null;
 
@@ -244,8 +245,20 @@ export function resetDrawingBoardRecordingState() {
 	drawingBoardPreRecordingVideoPath = null;
 }
 
+export function setDrawingBoardRecordingSessionActive(recording: boolean) {
+	isRecordingSessionActive = recording;
+}
+
 export function registerDrawingBoardHandlers() {
 	ipcMain.handle("open-drawing-board", async () => {
+		if (!isRecordingSessionActive) {
+			console.warn("[open-drawing-board] Rejected: no active recording session.");
+			return {
+				success: false,
+				message: "Drawing board can only be opened during an active recording.",
+			};
+		}
+
 		try {
 			const sourceType = selectedSource?.id?.startsWith("window:") ? "window" : "screen";
 			const windowBounds = selectedSource ? await resolveSelectedWindowBounds(selectedSource) : null;
