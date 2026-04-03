@@ -806,6 +806,10 @@ function createEditorWindowWrapper() {
 		isCreatingEditorWindow = false;
 		isForceClosing = false;
 		editorHasUnsavedChanges = false;
+
+		// After the editor window closes, re-create the HUD overlay so the user
+		// returns to the launcher instead of the app quitting entirely.
+		createWindow();
 	});
 
 	editorWindow.on("close", (event) => {
