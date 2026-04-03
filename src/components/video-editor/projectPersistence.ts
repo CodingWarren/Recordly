@@ -4,12 +4,14 @@ import { ASPECT_RATIOS, type AspectRatio, isCustomAspectRatio } from "@/utils/as
 import {
 	type AnnotationRegion,
 	type AudioRegion,
+	type ClickSoundSettings,
 	type AutoCaptionAnimation,
 	type AutoCaptionSettings,
 	type CaptionCue,
 	type CaptionCueWord,
 	type CropRegion,
 	type CursorStyle,
+	DEFAULT_CLICK_SOUND_SETTINGS,
 	DEFAULT_ANNOTATION_POSITION,
 	DEFAULT_ANNOTATION_SIZE,
 	DEFAULT_ANNOTATION_STYLE,
@@ -87,6 +89,7 @@ export interface ProjectEditorState {
 	speedRegions: SpeedRegion[];
 	annotationRegions: AnnotationRegion[];
 	audioRegions: AudioRegion[];
+	clickSound: ClickSoundSettings;
 	autoCaptions: CaptionCue[];
 	autoCaptionSettings: AutoCaptionSettings;
 	webcam: WebcamOverlaySettings;
@@ -219,6 +222,18 @@ export function validateProjectData(candidate: unknown): candidate is EditorProj
 	if (typeof project.videoPath !== "string" || !project.videoPath) return false;
 	if (!project.editor || typeof project.editor !== "object") return false;
 	return true;
+}
+
+function normalizeClickSound(value: Partial<ClickSoundSettings> | undefined): ClickSoundSettings {
+	if (!value || typeof value !== "object") return { ...DEFAULT_CLICK_SOUND_SETTINGS };
+	return {
+		enabled: typeof value.enabled === "boolean" ? value.enabled : DEFAULT_CLICK_SOUND_SETTINGS.enabled,
+		volume: isFiniteNumber(value.volume) ? clamp(value.volume, 0, 1) : DEFAULT_CLICK_SOUND_SETTINGS.volume,
+		style:
+			value.style === "subtle" || value.style === "soft" || value.style === "mechanical"
+				? value.style
+				: DEFAULT_CLICK_SOUND_SETTINGS.style,
+	};
 }
 
 export function normalizeProjectEditor(editor: Partial<ProjectEditorState>): ProjectEditorState {
@@ -613,6 +628,7 @@ export function normalizeProjectEditor(editor: Partial<ProjectEditorState>): Pro
 		speedRegions: normalizedSpeedRegions,
 		annotationRegions: normalizedAnnotationRegions,
 		audioRegions: normalizedAudioRegions,
+		clickSound: normalizeClickSound((editor as Partial<ProjectEditorState>).clickSound),
 		autoCaptions: normalizedAutoCaptions,
 		autoCaptionSettings: normalizedAutoCaptionSettings,
 		webcam: {

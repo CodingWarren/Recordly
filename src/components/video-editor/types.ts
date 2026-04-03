@@ -291,6 +291,20 @@ export interface AudioRegion {
 	volume: number;
 }
 
+export type ClickSoundStyle = "subtle" | "soft" | "mechanical";
+
+export interface ClickSoundSettings {
+	enabled: boolean;
+	volume: number; // 0–1
+	style: ClickSoundStyle;
+}
+
+export const DEFAULT_CLICK_SOUND_SETTINGS: ClickSoundSettings = {
+	enabled: false,
+	volume: 0.5,
+	style: "subtle",
+};
+
 export interface CaptionCue {
 	id: string;
 	startMs: number;

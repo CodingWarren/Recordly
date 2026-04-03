@@ -3,6 +3,7 @@ import type {
 	AnnotationRegion,
 	AudioRegion,
 	CaptionCue,
+	ClickSoundSettings,
 	CropRegion,
 	CursorStyle,
 	CursorTelemetryPoint,
@@ -57,6 +58,7 @@ interface VideoExporterConfig extends ExportConfig {
 	cursorSway?: number;
 	audioRegions?: AudioRegion[];
 	sourceAudioFallbackPaths?: string[];
+	clickSoundSettings?: ClickSoundSettings;
 	previewWidth?: number;
 	previewHeight?: number;
 	onProgress?: (progress: ExportProgress) => void;
@@ -198,7 +200,7 @@ export class VideoExporter {
 
 			if (hasAudio && !this.cancelled) {
 				const demuxer = this.streamingDecoder.getDemuxer();
-				if (demuxer || hasAudioRegions || hasSourceAudioFallback) {
+			if (demuxer || hasAudioRegions || hasSourceAudioFallback) {
 					this.audioProcessor = new AudioProcessor();
 					await this.awaitWithWindowsTimeout(
 						this.audioProcessor.process(
@@ -210,6 +212,8 @@ export class VideoExporter {
 							undefined,
 							this.config.audioRegions,
 							this.config.sourceAudioFallbackPaths,
+							this.config.clickSoundSettings,
+							this.config.cursorTelemetry,
 						),
 						"audio processing",
 					);

@@ -34,6 +34,8 @@ import type {
 	AutoCaptionAnimation,
 	AutoCaptionSettings,
 	CaptionCue,
+	ClickSoundSettings,
+	ClickSoundStyle,
 	CropRegion,
 	CursorStyle,
 	FigureData,
@@ -45,6 +47,7 @@ import type {
 } from "./types";
 import {
 	DEFAULT_AUTO_CAPTION_SETTINGS,
+	DEFAULT_CLICK_SOUND_SETTINGS,
 	DEFAULT_CROP_REGION,
 	DEFAULT_CURSOR_CLICK_BOUNCE,
 	DEFAULT_CURSOR_CLICK_BOUNCE_DURATION,
@@ -235,6 +238,8 @@ interface SettingsPanelProps {
 	selectedSpeedValue?: PlaybackSpeed | null;
 	onSpeedChange?: (speed: PlaybackSpeed) => void;
 	onSpeedDelete?: (id: string) => void;
+	clickSound?: ClickSoundSettings;
+	onClickSoundChange?: (settings: ClickSoundSettings) => void;
 }
 
 export default SettingsPanel;
@@ -574,6 +579,8 @@ export function SettingsPanel({
 	selectedSpeedValue,
 	onSpeedChange,
 	onSpeedDelete,
+	clickSound = DEFAULT_CLICK_SOUND_SETTINGS,
+	onClickSoundChange,
 }: SettingsPanelProps) {
 	const tSettings = useScopedT("settings");
 	const { t } = useI18n();
@@ -1856,6 +1863,61 @@ export function SettingsPanel({
 									return parseFloat(text.replace(/×$/, ""));
 								}}
 							/>
+							{/* ── Click Sound ─────────────────────────────────── */}
+							<div className="flex items-center justify-between rounded-lg bg-white/[0.03] px-2.5 py-1.5">
+								<span className="text-[10px] text-slate-400">
+									{tSettings("effects.clickSound", "Click Sound")}
+								</span>
+								<Switch
+									checked={clickSound.enabled}
+									onCheckedChange={(enabled) =>
+										onClickSoundChange?.({ ...clickSound, enabled })
+									}
+									className="data-[state=checked]:bg-[#2563EB] scale-75"
+								/>
+							</div>
+							{clickSound.enabled && (
+								<>
+									<SliderControl
+										label={tSettings("effects.clickSoundVolume", "Click Volume")}
+										value={clickSound.volume}
+										defaultValue={DEFAULT_CLICK_SOUND_SETTINGS.volume}
+										min={0}
+										max={1}
+										step={0.01}
+										onChange={(v) =>
+											onClickSoundChange?.({ ...clickSound, volume: v })
+										}
+										formatValue={(v) => `${Math.round(v * 100)}%`}
+										parseInput={(text) =>
+											parseFloat(text.replace(/%$/, "")) / 100
+										}
+									/>
+									<div className="flex items-center justify-between rounded-lg bg-white/[0.03] px-2.5 py-1.5">
+										<span className="text-[10px] text-slate-400">
+											{tSettings("effects.clickSoundStyle", "Sound Style")}
+										</span>
+										<Select
+											value={clickSound.style}
+											onValueChange={(value) =>
+												onClickSoundChange?.({
+													...clickSound,
+													style: value as ClickSoundStyle,
+												})
+											}
+										>
+											<SelectTrigger className="h-7 w-[110px] rounded-lg border-white/10 bg-white/5 text-[10px] text-slate-200 hover:bg-white/10">
+												<SelectValue />
+											</SelectTrigger>
+											<SelectContent className="border-white/10 bg-[#1a1a1f] text-slate-200">
+												<SelectItem value="subtle">Subtle</SelectItem>
+												<SelectItem value="soft">Soft</SelectItem>
+												<SelectItem value="mechanical">Mechanical</SelectItem>
+											</SelectContent>
+										</Select>
+									</div>
+								</>
+							)}
 						</div>
 					</section>
 				);

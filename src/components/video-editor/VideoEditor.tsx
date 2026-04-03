@@ -77,6 +77,7 @@ import {
 	type AudioRegion,
 	type AutoCaptionSettings,
 	type CaptionCue,
+	type ClickSoundSettings,
 	type CropRegion,
 	type CursorStyle,
 	type CursorTelemetryPoint,
@@ -85,6 +86,7 @@ import {
 	DEFAULT_ANNOTATION_SIZE,
 	DEFAULT_ANNOTATION_STYLE,
 	DEFAULT_AUTO_CAPTION_SETTINGS,
+	DEFAULT_CLICK_SOUND_SETTINGS,
 	DEFAULT_CONNECTED_ZOOM_DURATION_MS,
 	DEFAULT_CONNECTED_ZOOM_EASING,
 	DEFAULT_CONNECTED_ZOOM_GAP_MS,
@@ -384,6 +386,9 @@ export default function VideoEditor() {
 	const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
 	const [audioRegions, setAudioRegions] = useState<AudioRegion[]>([]);
 	const [selectedAudioId, setSelectedAudioId] = useState<string | null>(null);
+	const [clickSound, setClickSound] = useState<ClickSoundSettings>(
+		initialEditorPreferences.clickSound ?? DEFAULT_CLICK_SOUND_SETTINGS,
+	);
 	const [autoCaptions, setAutoCaptions] = useState<CaptionCue[]>([]);
 	const [autoCaptionSettings, setAutoCaptionSettings] = useState<AutoCaptionSettings>(
 		DEFAULT_AUTO_CAPTION_SETTINGS,
@@ -871,6 +876,7 @@ export default function VideoEditor() {
 				speedRegions: SpeedRegion[];
 				annotationRegions: AnnotationRegion[];
 				audioRegions: AudioRegion[];
+				clickSound: ClickSoundSettings;
 				autoCaptions: CaptionCue[];
 				autoCaptionSettings: AutoCaptionSettings;
 				aspectRatio: AspectRatio;
@@ -962,16 +968,17 @@ export default function VideoEditor() {
 				clipRegions,
 				speedRegions,
 				annotationRegions,
-				audioRegions,
-				autoCaptions,
-				autoCaptionSettings,
-				aspectRatio,
-				exportQuality,
-				exportFormat,
-				gifFrameRate,
-				gifLoop,
-				gifSizePreset,
-			}),
+			audioRegions,
+			clickSound,
+			autoCaptions,
+			autoCaptionSettings,
+			aspectRatio,
+			exportQuality,
+			exportFormat,
+			gifFrameRate,
+			gifLoop,
+			gifSizePreset,
+		}),
 		[
 			buildPersistedEditorState,
 			wallpaper,
@@ -1005,6 +1012,7 @@ export default function VideoEditor() {
 			speedRegions,
 			annotationRegions,
 			audioRegions,
+			clickSound,
 			autoCaptions,
 			autoCaptionSettings,
 			aspectRatio,
@@ -1187,8 +1195,9 @@ export default function VideoEditor() {
 			clipInitializedRef.current = ((normalizedEditor as any).clipRegions ?? []).length > 0;
 			setSpeedRegions(normalizedEditor.speedRegions);
 			setAnnotationRegions(normalizedEditor.annotationRegions);
-			setAudioRegions(normalizedEditor.audioRegions);
-			setAutoCaptions(normalizedEditor.autoCaptions);
+		setAudioRegions(normalizedEditor.audioRegions);
+		setClickSound(normalizedEditor.clickSound);
+		setAutoCaptions(normalizedEditor.autoCaptions);
 			setAutoCaptionSettings(normalizedEditor.autoCaptionSettings);
 			setAspectRatio(normalizedEditor.aspectRatio);
 			setExportQuality(normalizedEditor.exportQuality);
@@ -1437,6 +1446,7 @@ export default function VideoEditor() {
 			borderRadius,
 			padding,
 			webcam,
+			clickSound,
 			aspectRatio,
 			exportQuality,
 			exportFormat,
@@ -1472,6 +1482,7 @@ export default function VideoEditor() {
 		borderRadius,
 		padding,
 		webcam,
+		clickSound,
 		aspectRatio,
 		exportQuality,
 		exportFormat,
@@ -2965,8 +2976,9 @@ export default function VideoEditor() {
 						cursorClickBounce,
 						cursorClickBounceDuration,
 						cursorSway,
-						audioRegions,
+					audioRegions,
 						sourceAudioFallbackPaths,
+						clickSoundSettings: clickSound,
 						previewWidth,
 						previewHeight,
 						onProgress: (progress: ExportProgress) => {
@@ -3821,6 +3833,8 @@ export default function VideoEditor() {
 						}
 						onSpeedChange={handleSpeedChange}
 						onSpeedDelete={handleSpeedDelete}
+						clickSound={clickSound}
+						onClickSoundChange={setClickSound}
 					/>
 				</div>
 			</div>

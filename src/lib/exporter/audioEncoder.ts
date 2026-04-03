@@ -1,7 +1,8 @@
 import { WebDemuxer } from 'web-demuxer'
-import type { SpeedRegion, TrimRegion, AudioRegion } from '@/components/video-editor/types'
+import type { SpeedRegion, TrimRegion, AudioRegion, ClickSoundSettings, ClickSoundStyle, CursorTelemetryPoint } from '@/components/video-editor/types'
 import type { VideoMuxer } from './muxer'
 import { resolveMediaElementSource } from './localMediaSource'
+import { synthesizeClickSound } from './clickSoundSynthesizer'
 
 const AUDIO_BITRATE = 128_000
 const DECODE_BACKPRESSURE_LIMIT = 20
@@ -26,6 +27,8 @@ export class AudioProcessor {
     readEndSec?: number,
     audioRegions?: AudioRegion[],
     sourceAudioFallbackPaths?: string[],
+    clickSoundSettings?: ClickSoundSettings,
+    cursorTelemetry?: CursorTelemetryPoint[],
   ): Promise<void> {
     const sortedTrims = trimRegions ? [...trimRegions].sort((a, b) => a.startMs - b.startMs) : []
     const sortedSpeedRegions = speedRegions
@@ -40,11 +43,24 @@ export class AudioProcessor {
       ? sourceAudioFallbackPaths.filter((audioPath) => typeof audioPath === 'string' && audioPath.trim().length > 0)
       : []
 
-    // When audio regions or speed edits are present, use AudioContext mixing path.
+    // Collect click points from telemetry when click sound is enabled.
+    const clickPoints = (clickSoundSettings?.enabled && cursorTelemetry)
+      ? cursorTelemetry.filter(
+          (p) =>
+            p.interactionType === 'click' ||
+            p.interactionType === 'double-click' ||
+            p.interactionType === 'right-click',
+        )
+      : []
+
+    const hasClickSounds = clickPoints.length > 0 && (clickSoundSettings?.enabled ?? false)
+
+    // When audio regions, speed edits, or click sounds are present, use AudioContext mixing path.
     if (
       sortedSpeedRegions.length > 0
       || sortedAudioRegions.length > 0
       || sortedSourceAudioFallbackPaths.length > 0
+      || hasClickSounds
     ) {
       const renderedAudioBlob = await this.renderMixedTimelineAudio(
         videoUrl,
@@ -52,6 +68,8 @@ export class AudioProcessor {
         sortedSpeedRegions,
         sortedAudioRegions,
         sortedSourceAudioFallbackPaths,
+        hasClickSounds ? clickSoundSettings! : undefined,
+        hasClickSounds ? clickPoints : [],
       )
       if (!this.cancelled) {
         await this.muxRenderedAudioBlob(renderedAudioBlob, muxer)
@@ -286,7 +304,7 @@ export class AudioProcessor {
     }
   }
 
-  // Renders mixed audio: original video audio (with speed/trim) + external audio regions.
+  // Renders mixed audio: original video audio (with speed/trim) + external audio regions + click sounds.
   // Uses AudioContext to mix all sources into a single recorded stream.
   private async renderMixedTimelineAudio(
     videoUrl: string,
@@ -294,6 +312,8 @@ export class AudioProcessor {
     speedRegions: SpeedRegion[],
     audioRegions: AudioRegion[],
     sourceAudioFallbackPaths: string[] = [],
+    clickSoundSettings?: ClickSoundSettings,
+    clickPoints: CursorTelemetryPoint[] = [],
   ): Promise<Blob> {
     const timelineMediaSource = await resolveMediaElementSource(videoUrl)
     const timelineMedia = document.createElement('video')
@@ -392,8 +412,23 @@ export class AudioProcessor {
       })
     }
 
+    // ── Pre-synthesise click sound buffers ────────────────────────────────────
+    // We synthesise once and reuse the same buffer for every click event.
+    let clickSoundBuffer: AudioBuffer | null = null
+    if (clickSoundSettings?.enabled && clickPoints.length > 0) {
+      try {
+        clickSoundBuffer = synthesizeClickSound(audioContext, clickSoundSettings.style as ClickSoundStyle)
+      } catch (err) {
+        console.warn('[AudioProcessor] Failed to synthesise click sound buffer (non-fatal):', err)
+      }
+    }
+
     const { recorder, recordedBlobPromise } = this.startAudioRecording(destinationNode.stream)
     let rafId: number | null = null
+    // Track which click points have already been scheduled so we don't double-fire.
+    const scheduledClickIndices = new Set<number>()
+    // Capture the AudioContext time at which the video starts playing.
+    let videoStartContextTime = 0
 
     try {
       if (audioContext.state === 'suspended') {
@@ -402,6 +437,7 @@ export class AudioProcessor {
 
       await this.seekTo(timelineMedia, 0)
       await timelineMedia.play()
+      videoStartContextTime = audioContext.currentTime
 
       await new Promise<void>((resolve, reject) => {
         const cleanup = () => {
@@ -478,6 +514,42 @@ export class AudioProcessor {
               audioEl.play().catch(() => {})
             } else if (Math.abs(audioEl.currentTime - targetTimeSec) > 0.3) {
               audioEl.currentTime = targetTimeSec
+            }
+          }
+
+          // ── Schedule click sounds ──────────────────────────────────────────
+          // For each unscheduled click point whose source timestamp falls within
+          // a small lookahead window ahead of the current playback position,
+          // schedule an AudioBufferSourceNode to fire at the correct context time.
+          if (clickSoundBuffer && clickSoundSettings?.enabled) {
+            const LOOKAHEAD_MS = 200 // schedule up to 200 ms ahead
+            for (let ci = 0; ci < clickPoints.length; ci++) {
+              if (scheduledClickIndices.has(ci)) continue
+              const cp = clickPoints[ci]
+              // Skip clicks that fall inside a trim region (they won't appear in output).
+              if (this.findActiveTrimRegion(cp.timeMs, trimRegions)) continue
+              // Compute the output-timeline timestamp (trim-adjusted).
+              const outputMs = cp.timeMs - this.computeTrimOffset(cp.timeMs, trimRegions)
+              // Only schedule if within lookahead window of current output position.
+              const currentOutputMs = currentTimeMs - this.computeTrimOffset(currentTimeMs, trimRegions)
+              if (outputMs < currentOutputMs - 50 || outputMs > currentOutputMs + LOOKAHEAD_MS) continue
+
+              scheduledClickIndices.add(ci)
+              const scheduleAt = videoStartContextTime + outputMs / 1000
+              if (scheduleAt < audioContext.currentTime) continue // already past
+
+              const gainNode = audioContext.createGain()
+              gainNode.gain.value = Math.max(0, Math.min(1, clickSoundSettings.volume))
+              gainNode.connect(destinationNode)
+
+              const source = audioContext.createBufferSource()
+              source.buffer = clickSoundBuffer
+              source.connect(gainNode)
+              source.start(scheduleAt)
+              // Disconnect gain node after the buffer finishes to avoid leaks.
+              source.onended = () => {
+                try { gainNode.disconnect() } catch { /* ignore */ }
+              }
             }
           }
 
