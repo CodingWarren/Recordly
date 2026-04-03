@@ -807,9 +807,19 @@ function createEditorWindowWrapper() {
 		isForceClosing = false;
 		editorHasUnsavedChanges = false;
 
-		// After the editor window closes, re-create the HUD overlay so the user
-		// returns to the launcher instead of the app quitting entirely.
-		createWindow();
+		// After the editor window closes, return the user to the launcher.
+		// Prefer restoring the existing HUD overlay (which may still be running
+		// a recording session) over creating a brand-new one, so we don't
+		// accidentally destroy in-progress recording state or toolbar visibility.
+		const existingHud = getHudOverlayWindow();
+		if (existingHud && !existingHud.isDestroyed()) {
+			existingHud.show();
+			if (existingHud.isMinimized()) existingHud.restore();
+			existingHud.moveTop();
+			mainWindow = existingHud;
+		} else {
+			createWindow();
+		}
 	});
 
 	editorWindow.on("close", (event) => {
