@@ -1127,11 +1127,34 @@ export function createDrawingBoardWindow(
 	});
 
 	drawingBoardWindow = win;
+
+	// Prevent the drawing board from disappearing when it loses focus (e.g.
+	// when the user clicks the DevTools window or any other window).  The
+	// drawing board should only close when the user explicitly clicks the ❌
+	// button, not on blur.
+	win.on("blur", () => {
+		if (!win.isDestroyed() && win.isVisible()) {
+			win.showInactive();
+		}
+	});
+
 	win.on("closed", () => {
 		if (drawingBoardWindow === win) {
 			drawingBoardWindow = null;
 		}
 		stopHudKeepTopInterval();
+		// Restore the HUD overlay after the drawing board closes.  On Windows
+		// the HUD can be minimized when the drawing board window steals focus
+		// and then closes, leaving the HUD invisible.  Calling showInactive +
+		// moveTop brings it back without stealing focus from the user's app.
+		const hud = getHudOverlayWindow();
+		if (hud && !hud.isDestroyed()) {
+			if (hud.isMinimized()) {
+				hud.restore();
+			}
+			hud.showInactive();
+			hud.moveTop();
+		}
 	});
 
 	if (VITE_DEV_SERVER_URL) {
