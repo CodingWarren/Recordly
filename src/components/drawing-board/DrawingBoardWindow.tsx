@@ -184,15 +184,33 @@ export function DrawingBoardWindow() {
 						elements: parsed.elements ?? [],
 						appState: {
 							...(parsed.appState ?? {}),
+							// Always force transparent background regardless of saved state
+							viewBackgroundColor: "transparent",
 							collaborators: new Map(),
 						},
 					});
 					if (parsed.files && Object.keys(parsed.files).length > 0) {
 						excalidrawAPI.addFiles(Object.values(parsed.files));
 					}
+				} else {
+					// No saved data — still force transparent background in case
+					// Excalidraw restored a non-transparent color from its own
+					// internal localStorage persistence.
+					excalidrawAPI.updateScene({
+						appState: {
+							viewBackgroundColor: "transparent",
+							collaborators: new Map(),
+						},
+					});
 				}
 			} catch (error) {
 				console.error("Failed to load drawing data:", error);
+				// On error, still ensure transparent background
+				try {
+					excalidrawAPI.updateScene({
+						appState: { viewBackgroundColor: "transparent", collaborators: new Map() },
+					});
+				} catch { /* ignore */ }
 			}
 			setIsLoaded(true);
 			// Trigger the resize handler so windowSize state is updated and
