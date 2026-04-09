@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "platform": "win32",
+  "arch": "arm64",
+  "helpers": {
+    "wgc-capture": {
+      "binaryName": "wgc-capture.exe",
+      "binarySha256": "cd6f2ec1f687c9f860bbe14deeefca79b0997b497e52e9d552987611fb847555",
+      "sourceDir": "electron/native/wgc-capture",
+      "sourceFingerprint": "5bf41f7045414def6e510858b79df6272a65ef92c83fae062fb67442f1fc56aa",
+      "updatedAt": "2026-04-09T04:43:45.560Z"
+    }
+  }
+}
