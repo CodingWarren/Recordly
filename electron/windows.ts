@@ -34,6 +34,7 @@ let hudOverlayRecordingActive = false;
 let countdownWindow: BrowserWindow | null = null;
 let updateToastWindow: BrowserWindow | null = null;
 let drawingBoardWindow: BrowserWindow | null = null;
+let hudKeepTopInterval: ReturnType<typeof setInterval> | null = null;
 
 const HUD_OVERLAY_SETTINGS_FILE = path.join(USER_DATA_PATH, "hud-overlay-settings.json");
 const HUD_EDGE_MARGIN_DIP = 16;
@@ -186,6 +187,23 @@ function getSelectedSourceDisplayId(): number | null {
 	const raw = selectedSource?.display_id;
 	const parsed = Number(raw);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function startHudKeepTopInterval(): void {
+	stopHudKeepTopInterval();
+	hudKeepTopInterval = setInterval(() => {
+		const hud = getHudOverlayWindow();
+		if (hud && hud.isVisible()) {
+			hud.moveTop();
+		}
+	}, 500);
+}
+
+function stopHudKeepTopInterval(): void {
+	if (hudKeepTopInterval !== null) {
+		clearInterval(hudKeepTopInterval);
+		hudKeepTopInterval = null;
+	}
 }
 
 function getHudOverlayDisplay() {
@@ -1103,6 +1121,7 @@ export function createDrawingBoardWindow(
 				win.show();
 				win.focus();
 				win.setBounds(bounds, false);
+				startHudKeepTopInterval();
 			}
 		}, 80);
 	});
@@ -1112,6 +1131,7 @@ export function createDrawingBoardWindow(
 		if (drawingBoardWindow === win) {
 			drawingBoardWindow = null;
 		}
+		stopHudKeepTopInterval();
 	});
 
 	if (VITE_DEV_SERVER_URL) {
