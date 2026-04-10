@@ -56,6 +56,8 @@ import {
 	writeRecordingDiagnosticsSnapshot,
 } from "../recording/diagnostics";
 import {
+	destroyDrawingBoardWindow,
+	preloadDrawingBoardWindow,
 	resetDrawingBoardRecordingState,
 	resolveDrawingBoardMuxVideoPath,
 	setDrawingBoardRecordingSessionActive,
@@ -1836,6 +1838,9 @@ export function registerRecordingHandlers(
 			sampleCursorPoint();
 			startCursorSampling();
 			void startInteractionCapture();
+			void preloadDrawingBoardWindow().catch((error) => {
+				console.warn("[set-recording-state] Failed to preload drawing board window:", error);
+			});
 		} else {
 			setIsCursorCaptureActive(false);
 			stopCursorCapture();
@@ -1847,6 +1852,7 @@ export function registerRecordingHandlers(
 			resetCursorCaptureClock();
 			snapshotCursorTelemetryForPersistence();
 			setActiveCursorSamples([]);
+			destroyDrawingBoardWindow();
 		}
 
 		const source = selectedSource || { name: "Screen" };

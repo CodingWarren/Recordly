@@ -1054,9 +1054,19 @@ export function closeCountdownWindow(): void {
 export function createDrawingBoardWindow(
 	windowBounds?: { x: number; y: number; width: number; height: number } | null,
 	sourceType: "screen" | "window" = "screen",
+	options?: { show?: boolean },
 ): BrowserWindow {
+	const shouldShow = options?.show !== false;
+
 	if (drawingBoardWindow && !drawingBoardWindow.isDestroyed()) {
-		drawingBoardWindow.focus();
+		if (windowBounds) {
+			drawingBoardWindow.setBounds(windowBounds, false);
+		}
+		if (shouldShow) {
+			drawingBoardWindow.show();
+			drawingBoardWindow.focus();
+			startHudKeepTopInterval();
+		}
 		return drawingBoardWindow;
 	}
 
@@ -1118,10 +1128,14 @@ export function createDrawingBoardWindow(
 	win.webContents.on("did-finish-load", () => {
 		setTimeout(() => {
 			if (!win.isDestroyed()) {
-				win.show();
-				win.focus();
+				if (shouldShow) {
+					win.show();
+					win.focus();
+				}
 				win.setBounds(bounds, false);
-				startHudKeepTopInterval();
+				if (shouldShow) {
+					startHudKeepTopInterval();
+				}
 			}
 		}, 80);
 	});
@@ -1177,5 +1191,30 @@ export function closeDrawingBoardWindow(): void {
 	if (drawingBoardWindow && !drawingBoardWindow.isDestroyed()) {
 		drawingBoardWindow.close();
 		drawingBoardWindow = null;
+	}
+}
+
+export function showDrawingBoardWindow(): void {
+	if (drawingBoardWindow && !drawingBoardWindow.isDestroyed()) {
+		drawingBoardWindow.show();
+		drawingBoardWindow.focus();
+		startHudKeepTopInterval();
+	}
+}
+
+export function hideDrawingBoardWindow(): void {
+	if (!drawingBoardWindow || drawingBoardWindow.isDestroyed()) {
+		return;
+	}
+
+	drawingBoardWindow.hide();
+	stopHudKeepTopInterval();
+	const hud = getHudOverlayWindow();
+	if (hud && !hud.isDestroyed()) {
+		if (hud.isMinimized()) {
+			hud.restore();
+		}
+		hud.showInactive();
+		hud.moveTop();
 	}
 }

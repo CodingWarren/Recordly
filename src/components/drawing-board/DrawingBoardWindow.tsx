@@ -243,11 +243,6 @@ export function DrawingBoardWindow() {
 	}, [excalidrawAPI, isLoaded]);
 
 	const handleClose = () => {
-		// Stop background capture before closing
-		if (backgroundStreamRef.current) {
-			backgroundStreamRef.current.getTracks().forEach((track) => track.stop());
-			backgroundStreamRef.current = null;
-		}
 		void window.electronAPI.closeDrawingBoard();
 	};
 

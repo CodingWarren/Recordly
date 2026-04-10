@@ -6,6 +6,8 @@ import {
 	closeDrawingBoardWindow,
 	createDrawingBoardWindow,
 	getDrawingBoardWindow,
+	hideDrawingBoardWindow,
+	showDrawingBoardWindow,
 } from "../../windows";
 import {
 	resolveLinuxWindowBounds,
@@ -249,6 +251,16 @@ export function setDrawingBoardRecordingSessionActive(recording: boolean) {
 	isRecordingSessionActive = recording;
 }
 
+export async function preloadDrawingBoardWindow() {
+	const sourceType = selectedSource?.id?.startsWith("window:") ? "window" : "screen";
+	const windowBounds = selectedSource ? await resolveSelectedWindowBounds(selectedSource) : null;
+	createDrawingBoardWindow(windowBounds, sourceType, { show: false });
+}
+
+export function destroyDrawingBoardWindow() {
+	closeDrawingBoardWindow();
+}
+
 export function registerDrawingBoardHandlers() {
 	ipcMain.handle("open-drawing-board", async () => {
 		if (!isRecordingSessionActive) {
@@ -262,7 +274,8 @@ export function registerDrawingBoardHandlers() {
 		try {
 			const sourceType = selectedSource?.id?.startsWith("window:") ? "window" : "screen";
 			const windowBounds = selectedSource ? await resolveSelectedWindowBounds(selectedSource) : null;
-			createDrawingBoardWindow(windowBounds, sourceType);
+			createDrawingBoardWindow(windowBounds, sourceType, { show: false });
+			showDrawingBoardWindow();
 			await switchWindowsCaptureToDrawingBoard();
 			return { success: true };
 		} catch (error) {
@@ -273,7 +286,7 @@ export function registerDrawingBoardHandlers() {
 
 	ipcMain.handle("close-drawing-board", () => {
 		try {
-			closeDrawingBoardWindow();
+			hideDrawingBoardWindow();
 			return { success: true };
 		} catch (error) {
 			console.error("Failed to close drawing board:", error);
