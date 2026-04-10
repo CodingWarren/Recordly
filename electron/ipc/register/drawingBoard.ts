@@ -262,6 +262,16 @@ export function destroyDrawingBoardWindow() {
 }
 
 export function registerDrawingBoardHandlers() {
+	ipcMain.handle("preload-drawing-board", async () => {
+		try {
+			await preloadDrawingBoardWindow();
+			return { success: true };
+		} catch (error) {
+			console.error("Failed to preload drawing board:", error);
+			return { success: false, error: String(error) };
+		}
+	});
+
 	ipcMain.handle("open-drawing-board", async () => {
 		if (!isRecordingSessionActive) {
 			console.warn("[open-drawing-board] Rejected: no active recording session.");

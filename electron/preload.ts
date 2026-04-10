@@ -981,6 +981,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		ipcRenderer.on("countdown-tick", listener);
 		return () => ipcRenderer.removeListener("countdown-tick", listener);
 	},
+	preloadDrawingBoard: () => ipcRenderer.invoke("preload-drawing-board"),
 	openDrawingBoard: () => ipcRenderer.invoke("open-drawing-board"),
 	closeDrawingBoard: () => ipcRenderer.invoke("close-drawing-board"),
 	getDrawingBoardData: () => ipcRenderer.invoke("get-drawing-board-data"),

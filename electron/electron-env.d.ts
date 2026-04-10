@@ -898,6 +898,7 @@ interface Window {
 		cancelCountdown: () => Promise<{ success: boolean }>;
 		getActiveCountdown: () => Promise<{ success: boolean; seconds: number | null }>;
 		onCountdownTick: (callback: (seconds: number) => void) => () => void;
+		preloadDrawingBoard: () => Promise<{ success: boolean; error?: string }>;
 		openDrawingBoard: () => Promise<{ success: boolean; error?: string }>;
 		closeDrawingBoard: () => Promise<{ success: boolean; error?: string }>;
 		getDrawingBoardData: () => Promise<{ success: boolean; data: string | null }>;

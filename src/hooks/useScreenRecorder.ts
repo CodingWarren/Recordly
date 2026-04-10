@@ -2089,6 +2089,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		if (countdownDelay > 0) {
 			setCountdownActive(true);
 			try {
+				void window.electronAPI.preloadDrawingBoard?.();
 				const result = await window.electronAPI.startCountdown(countdownDelay);
 				if (!result.success || result.cancelled) {
 					return;
