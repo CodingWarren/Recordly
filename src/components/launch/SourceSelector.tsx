@@ -11,6 +11,7 @@ import {
 	isWindowSource,
 	type DesktopSource,
 } from "./popovers/launchPopoverTypes";
+import { previewSourceHighlight } from "./sourceHighlight";
 import "./launchTheme.css";
 import "./SourceSelector.css";
 import { useHudInteraction } from "./contexts/HudInteractionContext";
@@ -240,6 +241,7 @@ export const SourceSelector = React.memo(function SourceSelector({
 				const result = await window.electronAPI.selectSource(source);
 				if (result) {
 					setInternalSelectedSource(source.name);
+					void previewSourceHighlight(window.electronAPI, source);
 				}
 			} catch (error) {
 				console.error("Failed to select source:", error);
