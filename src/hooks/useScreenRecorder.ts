@@ -3,6 +3,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { getEffectiveRecordingDurationMs } from "@/lib/mediaTiming";
 import {
+	DEFAULT_RECORDING_PREFERENCES,
+	loadRecordingPreferences,
+	type RecordingPreferences,
+} from "./recordingPreferences";
+import {
 	getVideoExtensionForMimeType,
 	isWebmMimeType,
 	selectRecordingMimeType,
@@ -326,9 +331,15 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const [finalizing, setFinalizing] = useState(false);
 	const [countdownActive, setCountdownActive] = useState(false);
 	const [isMacOS, setIsMacOS] = useState(false);
-	const [microphoneEnabled, setMicrophoneEnabled] = useState(false);
-	const [microphoneDeviceId, setMicrophoneDeviceId] = useState<string | undefined>(undefined);
-	const [systemAudioEnabled, setSystemAudioEnabled] = useState(false);
+	const [microphoneEnabled, setMicrophoneEnabled] = useState(
+		DEFAULT_RECORDING_PREFERENCES.microphoneEnabled,
+	);
+	const [microphoneDeviceId, setMicrophoneDeviceId] = useState<string | undefined>(
+		DEFAULT_RECORDING_PREFERENCES.microphoneDeviceId,
+	);
+	const [systemAudioEnabled, setSystemAudioEnabled] = useState(
+		DEFAULT_RECORDING_PREFERENCES.systemAudioEnabled,
+	);
 	const [webcamEnabled, setWebcamEnabled] = useState(false);
 	const [webcamDeviceId, setWebcamDeviceId] = useState<string | undefined>(undefined);
 	const [countdownDelay, setCountdownDelayState] = useState(3);
@@ -352,6 +363,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const hasShownNativeWindowsFallbackToast = useRef(false);
 	const countdownDelayLoaded = useRef(false);
 	const recordingPrefsLoaded = useRef(false);
+	const recordingPrefsRef = useRef<RecordingPreferences>(DEFAULT_RECORDING_PREFERENCES);
+	const recordingPrefsLoadPromise = useRef<Promise<RecordingPreferences> | null>(null);
 	const pendingWebcamPathPromise = useRef<Promise<string | null> | null>(null);
 	const webcamStopPromise = useRef<Promise<string | null> | null>(null);
 	const webcamStopResolver = useRef<((path: string | null) => void) | null>(null);
@@ -1255,33 +1268,59 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		void window.electronAPI.setCountdownDelay(delay);
 	}, []);
 
-	useEffect(() => {
-		if (recordingPrefsLoaded.current) return;
-		recordingPrefsLoaded.current = true;
-
-		void (async () => {
-			const result = await window.electronAPI.getRecordingPreferences();
-			if (result.success) {
-				setMicrophoneEnabled(result.microphoneEnabled);
-				if (result.microphoneDeviceId) {
-					setMicrophoneDeviceId(result.microphoneDeviceId);
-				}
-				setSystemAudioEnabled(result.systemAudioEnabled);
-			}
-		})();
+	const applyRecordingPreferences = useCallback((preferences: RecordingPreferences) => {
+		recordingPrefsRef.current = preferences;
+		setMicrophoneEnabled(preferences.microphoneEnabled);
+		setMicrophoneDeviceId(preferences.microphoneDeviceId);
+		setSystemAudioEnabled(preferences.systemAudioEnabled);
 	}, []);
 
+	const ensureRecordingPreferencesLoaded = useCallback(async () => {
+		if (recordingPrefsLoaded.current) {
+			return recordingPrefsRef.current;
+		}
+
+		if (!recordingPrefsLoadPromise.current) {
+			recordingPrefsLoadPromise.current = loadRecordingPreferences(window.electronAPI);
+		}
+
+		const preferences = await recordingPrefsLoadPromise.current;
+		recordingPrefsLoaded.current = true;
+		applyRecordingPreferences(preferences);
+		return preferences;
+	}, [applyRecordingPreferences]);
+
+	useEffect(() => {
+		if (recordingPrefsLoaded.current) return;
+
+		void (async () => {
+			await ensureRecordingPreferencesLoaded();
+		})();
+	}, [ensureRecordingPreferencesLoaded]);
+
 	const persistMicrophoneEnabled = useCallback((enabled: boolean) => {
+		recordingPrefsRef.current = {
+			...recordingPrefsRef.current,
+			microphoneEnabled: enabled,
+		};
 		setMicrophoneEnabled(enabled);
 		void window.electronAPI.setRecordingPreferences({ microphoneEnabled: enabled });
 	}, []);
 
 	const persistMicrophoneDeviceId = useCallback((deviceId: string | undefined) => {
+		recordingPrefsRef.current = {
+			...recordingPrefsRef.current,
+			microphoneDeviceId: deviceId,
+		};
 		setMicrophoneDeviceId(deviceId);
 		void window.electronAPI.setRecordingPreferences({ microphoneDeviceId: deviceId });
 	}, []);
 
 	const persistSystemAudioEnabled = useCallback((enabled: boolean) => {
+		recordingPrefsRef.current = {
+			...recordingPrefsRef.current,
+			systemAudioEnabled: enabled,
+		};
 		setSystemAudioEnabled(enabled);
 		void window.electronAPI.setRecordingPreferences({ systemAudioEnabled: enabled });
 	}, []);
@@ -1402,6 +1441,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 			recordingSessionTimestamp.current = Date.now();
 			resetRecordingClock(recordingSessionTimestamp.current);
+			const activeRecordingPreferences = await ensureRecordingPreferencesLoaded();
+			const activeMicrophoneEnabled = activeRecordingPreferences.microphoneEnabled;
+			const activeMicrophoneDeviceId = activeRecordingPreferences.microphoneDeviceId;
+			const activeSystemAudioEnabled = activeRecordingPreferences.systemAudioEnabled;
 			await prepareWebcamRecorder();
 			const useNativeMacScreenCapture =
 				platform === "darwin" &&
@@ -1441,11 +1484,11 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			if (useNativeMacScreenCapture || useNativeWindowsCapture) {
 				// Resolve the selected mic label for native capture backends.
 				let micLabel: string | undefined;
-				if (microphoneEnabled) {
+				if (activeMicrophoneEnabled) {
 					try {
 						const devices = await navigator.mediaDevices.enumerateDevices();
 						const mic = devices.find(
-							(d) => d.deviceId === microphoneDeviceId && d.kind === "audioinput",
+							(d) => d.deviceId === activeMicrophoneDeviceId && d.kind === "audioinput",
 						);
 						micLabel = mic?.label || undefined;
 					} catch {
@@ -1456,9 +1499,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				const nativeResult = await window.electronAPI.startNativeScreenRecording(
 					selectedSource,
 					{
-						capturesSystemAudio: systemAudioEnabled,
-						capturesMicrophone: microphoneEnabled,
-						microphoneDeviceId,
+						capturesSystemAudio: activeSystemAudioEnabled,
+						capturesMicrophone: activeMicrophoneEnabled,
+						microphoneDeviceId: activeMicrophoneDeviceId,
 						microphoneLabel: micLabel,
 					},
 				);
@@ -1504,12 +1547,12 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 					// When native mic capture is unavailable or explicitly bypassed,
 					// record mic via browser getUserMedia as a sidecar file.
-					if (nativeResult.microphoneFallbackRequired && microphoneEnabled) {
+					if (nativeResult.microphoneFallbackRequired && activeMicrophoneEnabled) {
 						void logNativeCaptureDiagnostics("start-browser-microphone-fallback");
 						console.info("Using browser microphone processing for this recording.");
 						try {
 							const microphoneConstraints = createProcessedMicrophoneConstraints(
-								microphoneDeviceId,
+								activeMicrophoneDeviceId,
 								browserMicrophoneProfile.current,
 							);
 							micFallbackRequestedConstraints.current = microphoneConstraints;
@@ -1587,7 +1630,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			hideEditorOverlayCursorByDefault.current =
 				browserCursorPolicy.hideEditorOverlayCursorByDefault;
 
-			const wantsAudioCapture = microphoneEnabled || systemAudioEnabled;
+			const wantsAudioCapture = activeMicrophoneEnabled || activeSystemAudioEnabled;
 			const browserCaptureSource = await resolveBrowserCaptureSource(selectedSource);
 
 			if (
@@ -1646,7 +1689,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 						surfaceSwitching: "exclude",
 					});
 
-				if (systemAudioEnabled) {
+				if (activeSystemAudioEnabled) {
 					try {
 						screenMediaStream = useLinuxPortal
 							? await acquireLinuxPortalStream(true)
@@ -1693,11 +1736,11 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 				stream.current.addTrack(videoTrack);
 
-				if (microphoneEnabled) {
+				if (activeMicrophoneEnabled) {
 					try {
 						microphoneStream.current = await navigator.mediaDevices.getUserMedia(
 							createProcessedMicrophoneConstraints(
-								microphoneDeviceId,
+								activeMicrophoneDeviceId,
 								browserMicrophoneProfile.current,
 							),
 						);

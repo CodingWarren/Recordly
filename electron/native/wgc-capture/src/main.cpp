@@ -301,11 +301,15 @@ int main(int argc, char* argv[]) {
             return 1;
         }
     } else {
-        HMONITOR monitor = findMonitorByDisplayId(config.displayId);
-        if (!monitor && config.hasDisplayBounds) {
-            std::cerr << "Monitor ID match failed, attempting coordinate-based match: "
+        HMONITOR monitor = nullptr;
+        if (config.hasDisplayBounds) {
+            std::cerr << "Attempting coordinate-based monitor match first: "
                       << config.displayX << "," << config.displayY << " " << config.displayW << "x" << config.displayH << std::endl;
             monitor = findMonitorByBounds(config.displayX, config.displayY, config.displayW, config.displayH);
+        }
+
+        if (!monitor) {
+            monitor = findMonitorByDisplayId(config.displayId);
         }
 
         if (!monitor) {
